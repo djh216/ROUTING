@@ -1,0 +1,6 @@
+{
+  "name": "F Magnotta Wines - Routing",
+  "description": "Route planning and dispatch system for Pennsylvania wine distribution featuring multi-day routes, territory cutoffs, drag-and-drop route boards, interactive maps, and delivery schedules.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
