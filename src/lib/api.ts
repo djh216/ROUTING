@@ -259,6 +259,41 @@ export async function assignStopToTruck(
   return res.json();
 }
 
+export async function updateStopDeliveryInstructions(
+  cycleId: string,
+  stopId: string,
+  deliveryInstructions: string
+): Promise<RoutePlan> {
+  const res = await fetch(`${API}/routes/${encodeURIComponent(cycleId)}/stop-instructions`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ stopId, deliveryInstructions }),
+  });
+  if (!res.ok) {
+    const data = (await res.json().catch(() => ({}))) as { error?: string };
+    throw new Error(data.error ?? "Failed to update delivery instructions");
+  }
+  return res.json();
+}
+
+export async function updateStopContact(
+  cycleId: string,
+  stopId: string,
+  contactName: string,
+  contactPhone: string
+): Promise<RoutePlan> {
+  const res = await fetch(`${API}/routes/${encodeURIComponent(cycleId)}/stop-contact`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ stopId, contactName, contactPhone }),
+  });
+  if (!res.ok) {
+    const data = (await res.json().catch(() => ({}))) as { error?: string };
+    throw new Error(data.error ?? "Failed to update contact");
+  }
+  return res.json();
+}
+
 export async function addTruck(cycleId: string): Promise<RoutePlan> {
   const res = await fetch(`${API}/routes/${cycleId}/add-truck`, { method: "POST" });
   if (!res.ok) throw new Error("Failed to add truck");
@@ -283,15 +318,17 @@ export async function lockRoute(cycleId: string): Promise<RoutePlan> {
   return res.json();
 }
 
-export interface RouteGeometrySegment {
-  segmentId: string;
-  path: { lat: number; lng: number }[];
-}
+import type {
+  RouteGeometryResult,
+  RouteLegInfo,
+  SegmentGeometry,
+  SegmentTrafficAlert,
+  TrafficDelayLevel,
+} from "@shared/routeGeometry";
 
-export interface RouteGeometryResponse {
-  source: "google" | "estimated";
-  segments: RouteGeometrySegment[];
-}
+export type { RouteLegInfo, SegmentTrafficAlert, TrafficDelayLevel };
+export type RouteGeometrySegment = SegmentGeometry;
+export type RouteGeometryResponse = RouteGeometryResult;
 
 export async function fetchRouteGeometry(
   cycleId: string,

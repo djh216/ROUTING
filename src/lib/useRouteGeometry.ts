@@ -1,14 +1,24 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { RoutePlan } from "@shared/types";
-import { fetchRouteGeometry, type RouteGeometryResponse } from "./api";
+import { fetchRouteGeometry, type RouteGeometryResponse, type RouteLegInfo, type SegmentTrafficAlert } from "./api";
 import type { SegmentUpdate } from "./segmentDrag";
 import { segmentRoutesCacheKey, type LatLng } from "./routeMapUtils";
 
-function toGeometryPaths(data: RouteGeometryResponse): Map<string, LatLng[]> {
+export interface GeometrySegmentData {
+  path: LatLng[];
+  legs?: RouteLegInfo[];
+  trafficAlert?: SegmentTrafficAlert;
+}
+
+function toGeometryMap(data: RouteGeometryResponse): Map<string, GeometrySegmentData> {
   return new Map(
     data.segments.map((seg) => [
       seg.segmentId,
-      seg.path.map((p) => [p.lat, p.lng] as LatLng),
+      {
+        path: seg.path.map((p) => [p.lat, p.lng] as LatLng),
+        legs: seg.legs,
+        trafficAlert: seg.trafficAlert,
+      },
     ])
   );
 }
@@ -22,7 +32,9 @@ export function useRouteGeometry(
   const freezeGeometry = plan.manualTruckAssignment === true;
   const [geometry, setGeometry] = useState<{
     routeKey: string;
+    segments: Map<string, GeometrySegmentData>;
     paths: Map<string, LatLng[]>;
+    trafficSummary?: RouteGeometryResponse["trafficSummary"];
     source: RouteGeometryResponse["source"];
   } | null>(null);
   const [loading, setLoading] = useState(false);
@@ -56,9 +68,15 @@ export function useRouteGeometry(
       )
         .then((result) => {
           if (id !== requestId.current) return;
+          const segMap = toGeometryMap(result);
+          const pathMap = new Map(
+            Array.from(segMap.entries()).map(([k, v]) => [k, v.path])
+          );
           setGeometry({
             routeKey,
-            paths: toGeometryPaths(result),
+            segments: segMap,
+            paths: pathMap,
+            trafficSummary: result.trafficSummary,
             source: result.source,
           });
         })
@@ -86,6 +104,12 @@ export function useRouteGeometry(
     ? [cycleId, geometryRefreshKey, freezeGeometry]
     : [cycleId, previewSegments, routeKey, freezeGeometry]);
 
+  const geometrySegments = useMemo(() => {
+    if (!geometry) return null;
+    if (!freezeGeometry && geometry.routeKey !== routeKey) return null;
+    return geometry.segments;
+  }, [geometry, routeKey, freezeGeometry]);
+
   const geometryPaths = useMemo(() => {
     if (!geometry) return null;
     if (!freezeGeometry && geometry.routeKey !== routeKey) return null;
@@ -93,7 +117,9 @@ export function useRouteGeometry(
   }, [geometry, routeKey, freezeGeometry]);
 
   return {
+    geometrySegments,
     geometryPaths,
+    trafficSummary: geometry?.trafficSummary,
     geometrySource: geometryPaths ? geometry?.source ?? null : null,
     loading,
   };

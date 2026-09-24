@@ -38,7 +38,6 @@ export function generatePrintableHtml(
           <td class="col-addr">${escapeHtml(stop.address)}, ${escapeHtml(stop.city)}</td>
           <td class="col-contact">${contactInfo || "—"}</td>
           <td class="col-eta"><strong>${escapeHtml(v.stopEtas[stop.id] ?? "—")}</strong></td>
-          <td class="col-cases">${stop.cases ?? "—"}</td>
           <td class="col-instructions">${escapeHtml(stop.deliveryInstructions) || "—"}</td>
         </tr>`;
 
@@ -47,7 +46,7 @@ export function generatePrintableHtml(
           ? `
         <tr class="break-row">
           <td class="col-num">—</td>
-          <td colspan="6">
+          <td colspan="5">
             *** ${DRIVER_BREAK_MINUTES} MIN DRIVER BREAK ***
           </td>
         </tr>`
@@ -213,7 +212,6 @@ export function generatePrintableHtml(
     .col-addr { width: 24%; }
     .col-contact { width: 17%; }
     .col-eta { width: 50px; text-align: center; }
-    .col-cases { width: 42px; text-align: center; }
     .col-instructions { width: auto; }
     tr:nth-child(even) td {
       background: #f8fafc;
@@ -238,7 +236,7 @@ export function generatePrintableHtml(
   <div class="no-print-bar">
     <div>
       <h3>Print Delivery Manifest — ${escapeHtml(segment.label)}</h3>
-      <p>${escapeHtml(plan.territoryName)} · ${escapeHtml(segment.deliveryDate)} · ${v.stopCount} stops · ${v.totalCases} cases</p>
+      <p>${escapeHtml(plan.territoryName)} · ${escapeHtml(segment.deliveryDate)} · ${v.stopCount} stops</p>
     </div>
     <div class="btn-group">
       <button class="btn" onclick="window.print()">🖨️ Print Manifest</button>
@@ -264,7 +262,6 @@ export function generatePrintableHtml(
 
   <div class="summary-box">
     <div class="summary-item">Stops: <strong>${v.stopCount}</strong></div>
-    <div class="summary-item">Total Cases: <strong>${v.totalCases}</strong></div>
     <div class="summary-item">Total Miles: <strong>${v.totalMiles} mi</strong></div>
     ${v.departureTime ? `<div class="summary-item">Depart: <strong>${escapeHtml(v.departureTime)}</strong></div>` : ""}
     ${v.completionTime ? `<div class="summary-item">Done by: <strong>${escapeHtml(v.completionTime)}</strong></div>` : ""}
@@ -285,7 +282,6 @@ export function generatePrintableHtml(
           <th class="col-addr">Address</th>
           <th class="col-contact">Contact</th>
           <th class="col-eta">ETA</th>
-          <th class="col-cases">Cases</th>
           <th class="col-instructions">Delivery Instructions</th>
         </tr>
       </thead>

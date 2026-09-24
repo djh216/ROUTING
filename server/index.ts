@@ -18,6 +18,8 @@ import {
   clearCustomerData,
   regeocodeAllCustomers,
   removeOrderForCustomer,
+  updateCustomerContact,
+  updateCustomerDeliveryInstructions,
 } from "./data/customer-store.js";
 import { uniqueTerritories } from "./data/territories.js";
 import {
@@ -372,6 +374,104 @@ app.post("/api/routes/:cycleId/service-time", async (req, res) => {
   } catch (e) {
     res.status(500).json({ error: e instanceof Error ? e.message : "Failed to update service time" });
   }
+});
+
+app.post("/api/routes/:cycleId/stop-instructions", async (req, res) => {
+  try {
+    const plan = await getOrCreatePlan(req.params.cycleId);
+    const { stopId, deliveryInstructions } = req.body as {
+      stopId: string;
+      deliveryInstructions: string;
+    };
+    if (!stopId) {
+      res.status(400).json({ error: "stopId is required" });
+      return;
+    }
+    const cleanInstructions = typeof deliveryInstructions === "string" ? deliveryInstructions.trim() : "";
+
+    const stop = plan.allStops.find((s) => s.id === stopId || s.customerId === stopId);
+    if (!stop) {
+      res.status(404).json({ error: "Stop not found on route" });
+      return;
+    }
+    stop.deliveryInstructions = cleanInstructions;
+
+    // Update in customer store
+    updateCustomerDeliveryInstructions(stop.customerId, cleanInstructions);
+
+    // Sync to all cached route plans that contain this customer
+    for (const otherPlan of routePlans.values()) {
+      for (const otherStop of otherPlan.allStops) {
+        if (otherStop.customerId === stop.customerId || otherStop.id === stop.id) {
+          otherStop.deliveryInstructions = cleanInstructions;
+        }
+      }
+    }
+
+    res.json(plan);
+  } catch (e) {
+    res.status(500).json({ error: e instanceof Error ? e.message : "Failed to update instructions" });
+  }
+});
+
+app.post("/api/routes/:cycleId/stop-contact", async (req, res) => {
+  try {
+    const plan = await getOrCreatePlan(req.params.cycleId);
+    const { stopId, contactName, contactPhone } = req.body as {
+      stopId: string;
+      contactName?: string;
+      contactPhone?: string;
+    };
+    if (!stopId) {
+      res.status(400).json({ error: "stopId is required" });
+      return;
+    }
+
+    const stop = plan.allStops.find((s) => s.id === stopId || s.customerId === stopId);
+    if (!stop) {
+      res.status(404).json({ error: "Stop not found on route" });
+      return;
+    }
+
+    const updatedCustomer = updateCustomerContact(stop.customerId, contactName || "", contactPhone || "");
+    const cleanName = updatedCustomer?.contactName ?? contactName?.trim() ?? "";
+    const cleanPhone = updatedCustomer?.contactPhone ?? contactPhone?.trim() ?? "";
+
+    stop.contactName = cleanName;
+    stop.contactPhone = cleanPhone;
+
+    // Sync across all cached route plans that contain this customer
+    for (const otherPlan of routePlans.values()) {
+      for (const otherStop of otherPlan.allStops) {
+        if (otherStop.customerId === stop.customerId || otherStop.id === stop.id) {
+          otherStop.contactName = cleanName;
+          otherStop.contactPhone = cleanPhone;
+        }
+      }
+    }
+
+    res.json(plan);
+  } catch (e) {
+    res.status(500).json({ error: e instanceof Error ? e.message : "Failed to update contact" });
+  }
+});
+
+app.post("/api/customers/:customerId/delivery-instructions", (req, res) => {
+  const { deliveryInstructions } = req.body as { deliveryInstructions: string };
+  const cleanInstructions = typeof deliveryInstructions === "string" ? deliveryInstructions.trim() : "";
+  const customer = updateCustomerDeliveryInstructions(req.params.customerId, cleanInstructions);
+  if (!customer) {
+    res.status(404).json({ error: "Customer not found" });
+    return;
+  }
+  for (const plan of routePlans.values()) {
+    for (const stop of plan.allStops) {
+      if (stop.customerId === customer.id || stop.id === customer.id) {
+        stop.deliveryInstructions = cleanInstructions;
+      }
+    }
+  }
+  res.json({ ok: true, customer });
 });
 
 app.post("/api/routes/:cycleId/reorder", async (req, res) => {

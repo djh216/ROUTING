@@ -22,6 +22,8 @@ import {
   setWedThreshold,
   reoptimizeSegments,
   updateSegments,
+  updateStopDeliveryInstructions,
+  updateStopContact,
 } from "./lib/api";
 import { applySegmentUpdates, type SegmentUpdate } from "./lib/segmentDrag";
 import { formatDateTime } from "@shared/timeFormat";
@@ -217,6 +219,32 @@ export default function App() {
     [selectedCycleId]
   );
 
+  const handleDeliveryInstructionsChange = useCallback(
+    async (stopId: string, instructions: string) => {
+      if (!selectedCycleId) return;
+      try {
+        const updated = await updateStopDeliveryInstructions(selectedCycleId, stopId, instructions);
+        setPlan(updated);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "Failed to update delivery instructions");
+      }
+    },
+    [selectedCycleId]
+  );
+
+  const handleContactChange = useCallback(
+    async (stopId: string, contactName: string, contactPhone: string) => {
+      if (!selectedCycleId) return;
+      try {
+        const updated = await updateStopContact(selectedCycleId, stopId, contactName, contactPhone);
+        setPlan(updated);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "Failed to update contact");
+      }
+    },
+    [selectedCycleId]
+  );
+
   const handleCustomersLoaded = useCallback(() => {
     setOrderListKey((k) => k + 1);
   }, []);
@@ -366,8 +394,7 @@ export default function App() {
               <h2>{plan.territoryName}</h2>
               <p>
                 Delivery {plan.deliveryDate} · Batch {plan.batchId} ·{" "}
-                {plan.allStops.length} stops ·{" "}
-                {plan.allStops.reduce((s, st) => s + st.cases, 0)} cases · Depot:{" "}
+                {plan.allStops.length} stops · Depot:{" "}
                 {plan.depot.address}, {plan.depot.city}
               </p>
               <p className="main__cutoff">
@@ -446,6 +473,12 @@ export default function App() {
               }
               onAssignTruck={
                 plan.status !== "locked" ? handleAssignTruck : undefined
+              }
+              onDeliveryInstructionsChange={(stopId, instructions) =>
+                void handleDeliveryInstructionsChange(stopId, instructions)
+              }
+              onContactChange={(stopId, name, phone) =>
+                void handleContactChange(stopId, name, phone)
               }
             />
           </>

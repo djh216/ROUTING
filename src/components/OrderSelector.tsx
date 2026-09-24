@@ -140,6 +140,7 @@ export default function OrderSelector({ onApplied, refreshKey = 0 }: OrderSelect
     return (
       <section className="order-selector order-selector--empty">
         <h2>Orders this week</h2>
+        <p className="order-selector__hint">Upload a CSV above or add orders manually to select accounts.</p>
       </section>
     );
   }

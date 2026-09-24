@@ -3,22 +3,18 @@ import {
   waypointsCacheKey,
   type LatLng,
   type SegmentAssignmentUpdate,
+  type RouteLegInfo,
+  type SegmentTrafficAlert,
+  type SegmentGeometry,
+  type RouteGeometryResult,
+  type TrafficDelayLevel,
 } from "../../shared/routeGeometry.js";
-import type { RoutePlan } from "../../shared/types.js";
-import { deliveryDepartureTimestamp } from "./travel-time.js";
+import type { RoutePlan, Stop } from "../../shared/types.js";
+import { deliveryDepartureTimestamp, fetchGoogleLegDuration, haversineMeters } from "./travel-time.js";
 import { isGoogleMapsBlocked, recordGoogleMapsError } from "./google-maps-status.js";
 
 export type RouteGeometrySource = "google" | "estimated";
-
-export interface SegmentGeometry {
-  segmentId: string;
-  path: LatLng[];
-}
-
-export interface RouteGeometryResult {
-  source: RouteGeometrySource;
-  segments: SegmentGeometry[];
-}
+export type { SegmentGeometry, RouteGeometryResult, RouteLegInfo, SegmentTrafficAlert, TrafficDelayLevel };
 
 const geometryCache = new Map<string, LatLng[]>();
 const REQUEST_DELAY_MS = 100;
@@ -38,6 +34,17 @@ function appendPath(combined: LatLng[], segment: LatLng[]): void {
     next.shift();
   }
   combined.push(...next);
+}
+
+/** Classify traffic delay using Distance Matrix metrics */
+export function classifyTrafficDelay(trafficMinutes: number, baseMinutes: number): TrafficDelayLevel {
+  if (trafficMinutes >= 8 || (trafficMinutes >= 5 && baseMinutes > 0 && trafficMinutes / baseMinutes >= 0.25)) {
+    return "significant";
+  }
+  if (trafficMinutes >= 3) {
+    return "moderate";
+  }
+  return "normal";
 }
 
 /** Decode Google's encoded polyline format. */
@@ -150,26 +157,157 @@ async function fetchDirectionsBetween(
 }
 
 /** Fetch road-following path through waypoints in order, one Google leg at a time. */
-async function fetchDirectionsPath(
-  waypoints: LatLng[],
-  departureTime: number | undefined,
-  apiKey: string
-): Promise<LatLng[]> {
-  if (waypoints.length < 2) return waypoints;
+async function buildSegmentDetails(
+  seg: { segmentId: string; label: string; deliveryDate: string; waypoints: LatLng[] },
+  plan: RoutePlan,
+  stopMap: Map<string, Stop>,
+  departureTime: number,
+  apiKey: string | undefined,
+  isGoogleAvailable: boolean
+): Promise<{ path: LatLng[]; legs: RouteLegInfo[]; trafficAlert: SegmentTrafficAlert }> {
+  const segment = plan.segments.find((s) => s.id === seg.segmentId);
+  const stops = (segment?.stops ?? [])
+    .map((a) => stopMap.get(a.stopId))
+    .filter((s): s is Stop => !!s);
 
-  const combined: LatLng[] = [];
-  for (let i = 0; i < waypoints.length - 1; i++) {
-    const legPath = await fetchDirectionsBetween(
-      waypoints[i],
-      waypoints[i + 1],
-      departureTime,
-      apiKey
-    );
-    appendPath(combined, legPath);
-    if (i < waypoints.length - 2) await sleep(REQUEST_DELAY_MS);
+  const waypoints = seg.waypoints;
+  const combinedPath: LatLng[] = [];
+  const legs: RouteLegInfo[] = [];
+
+  if (waypoints.length < 2) {
+    return {
+      path: waypoints,
+      legs: [],
+      trafficAlert: {
+        hasSignificantDelay: false,
+        maxDelayMinutes: 0,
+        totalDelayMinutes: 0,
+        delayedLegsCount: 0,
+        alerts: [],
+      },
+    };
   }
 
-  return combined;
+  for (let i = 0; i < waypoints.length - 1; i++) {
+    const fromCoords = waypoints[i];
+    const toCoords = waypoints[i + 1];
+
+    let fromName: string;
+    let fromStopId: string | undefined;
+    let toName: string;
+    let toStopId: string | undefined;
+
+    if (i === 0) {
+      fromName = segment?.startLocation === "Scranton" ? "Scranton Depot" : "Start Location";
+      toStopId = stops[0]?.id;
+      toName = stops[0] ? `${stops[0].customerName} (${stops[0].city})` : "Stop 1";
+    } else if (i <= stops.length - 1) {
+      fromStopId = stops[i - 1]?.id;
+      fromName = stops[i - 1] ? `${stops[i - 1].customerName} (${stops[i - 1].city})` : `Stop ${i}`;
+      toStopId = stops[i]?.id;
+      toName = stops[i] ? `${stops[i].customerName} (${stops[i].city})` : `Stop ${i + 1}`;
+    } else {
+      fromStopId = stops[stops.length - 1]?.id;
+      fromName = stops[stops.length - 1] ? `${stops[stops.length - 1].customerName} (${stops[stops.length - 1].city})` : "Last Stop";
+      toName = "Scranton Depot (Return)";
+    }
+
+    let legPath: LatLng[];
+    if (isGoogleAvailable && apiKey) {
+      try {
+        legPath = await fetchDirectionsBetween(fromCoords, toCoords, departureTime, apiKey);
+      } catch (err) {
+        legPath = [fromCoords, toCoords];
+      }
+    } else {
+      legPath = [fromCoords, toCoords];
+    }
+    appendPath(combinedPath, legPath);
+
+    let trafficMinutes = 0;
+    let baseMinutes = 0;
+    let driveMinutes = 0;
+
+    if (toStopId && segment?.validation.stopTrafficMinutes?.[toStopId] != null) {
+      trafficMinutes = Math.max(0, Math.round(segment.validation.stopTrafficMinutes[toStopId]));
+      baseMinutes = Math.round(
+        segment.validation.stopBaseDriveMinutes?.[toStopId] ??
+          segment.validation.stopDriveMinutes?.[toStopId] ??
+          0
+      );
+      driveMinutes = Math.round(
+        segment.validation.stopDriveMinutes?.[toStopId] ?? (baseMinutes + trafficMinutes)
+      );
+    } else if (isGoogleAvailable && apiKey) {
+      const liveDuration = await fetchGoogleLegDuration(fromCoords, toCoords, departureTime, apiKey);
+      if (liveDuration) {
+        trafficMinutes = Math.max(0, Math.round(liveDuration.trafficMinutes));
+        baseMinutes = Math.round(liveDuration.baseMinutes);
+        driveMinutes = Math.round(liveDuration.driveMinutes);
+      } else {
+        const estMinutes = Math.round(
+          (haversineMeters(fromCoords.lat, fromCoords.lng, toCoords.lat, toCoords.lng) / 1609.344 / 45) * 60
+        );
+        baseMinutes = estMinutes;
+        driveMinutes = estMinutes;
+        trafficMinutes = 0;
+      }
+    } else {
+      const estMinutes = Math.round(
+        (haversineMeters(fromCoords.lat, fromCoords.lng, toCoords.lat, toCoords.lng) / 1609.344 / 45) * 60
+      );
+      baseMinutes = estMinutes;
+      driveMinutes = estMinutes;
+      trafficMinutes = 0;
+    }
+
+    const delayLevel = classifyTrafficDelay(trafficMinutes, baseMinutes);
+    const delayPercentage = baseMinutes > 0 ? Math.round((trafficMinutes / baseMinutes) * 100) : 0;
+
+    legs.push({
+      legIndex: i,
+      segmentId: seg.segmentId,
+      fromName,
+      toName,
+      fromStopId,
+      toStopId,
+      fromCoords,
+      toCoords,
+      path: legPath,
+      driveMinutes,
+      baseMinutes,
+      trafficMinutes,
+      delayLevel,
+      delayPercentage,
+    });
+
+    if (i < waypoints.length - 2 && isGoogleAvailable) {
+      await sleep(REQUEST_DELAY_MS);
+    }
+  }
+
+  const delayedLegs = legs.filter((l) => l.delayLevel === "significant" || l.delayLevel === "moderate");
+  const significantLegs = legs.filter((l) => l.delayLevel === "significant");
+  const totalDelayMinutes = legs.reduce((sum, l) => sum + (l.trafficMinutes ?? 0), 0);
+  const maxDelayMinutes = Math.max(0, ...legs.map((l) => l.trafficMinutes ?? 0));
+
+  const trafficAlert: SegmentTrafficAlert = {
+    hasSignificantDelay: significantLegs.length > 0,
+    maxDelayMinutes,
+    totalDelayMinutes,
+    delayedLegsCount: delayedLegs.length,
+    alerts: delayedLegs.map((l) => ({
+      legIndex: l.legIndex,
+      fromName: l.fromName,
+      toName: l.toName,
+      delayMinutes: l.trafficMinutes ?? 0,
+      driveMinutes: l.driveMinutes ?? 0,
+      baseMinutes: l.baseMinutes ?? 0,
+      delayLevel: l.delayLevel,
+    })),
+  };
+
+  return { path: combinedPath, legs, trafficAlert };
 }
 
 export async function buildRouteGeometry(
@@ -179,26 +317,65 @@ export async function buildRouteGeometry(
 ): Promise<RouteGeometryResult> {
   const apiKey = options?.apiKey ?? process.env.GOOGLE_MAPS_API_KEY;
   const segmentDefs = buildSegmentWaypoints(plan, segmentOverrides);
-  const segments: SegmentGeometry[] = [];
+  const stopMap = new Map(plan.allStops.map((s) => [s.id, s]));
+  const isGoogleAvailable = !(!apiKey || isGoogleMapsBlocked());
 
-  if (!apiKey || isGoogleMapsBlocked()) {
-    return {
-      source: "estimated",
-      segments: segmentDefs.map((seg) => ({
-        segmentId: seg.segmentId,
-        path: seg.waypoints,
-      })),
-    };
-  }
+  const segments: SegmentGeometry[] = [];
 
   try {
     for (const seg of segmentDefs) {
       const departureTime = deliveryDepartureTimestamp(seg.deliveryDate, 10);
-      const path = await fetchDirectionsPath(seg.waypoints, departureTime, apiKey);
-      segments.push({ segmentId: seg.segmentId, path });
-      await sleep(REQUEST_DELAY_MS);
+      const details = await buildSegmentDetails(
+        seg,
+        plan,
+        stopMap,
+        departureTime,
+        apiKey,
+        isGoogleAvailable
+      );
+      segments.push({
+        segmentId: seg.segmentId,
+        path: details.path,
+        legs: details.legs,
+        trafficAlert: details.trafficAlert,
+      });
+      if (isGoogleAvailable) {
+        await sleep(REQUEST_DELAY_MS);
+      }
     }
-    return { source: "google", segments };
+
+    const allAlerts = segments.flatMap((s) =>
+      (s.legs ?? [])
+        .filter((l) => l.delayLevel === "significant" || l.delayLevel === "moderate")
+        .map((l) => {
+          const segLabel = plan.segments.find((seg) => seg.id === s.segmentId)?.label ?? s.segmentId;
+          return {
+            segmentId: s.segmentId,
+            segmentLabel: segLabel,
+            fromName: l.fromName,
+            toName: l.toName,
+            delayMinutes: l.trafficMinutes ?? 0,
+            driveMinutes: l.driveMinutes ?? 0,
+            baseMinutes: l.baseMinutes ?? 0,
+            delayLevel: l.delayLevel,
+          };
+        })
+    );
+
+    const hasSignificantDelay = allAlerts.some((a) => a.delayLevel === "significant");
+    const totalTrafficDelayMinutes = allAlerts.reduce((sum, a) => sum + a.delayMinutes, 0);
+    const delayedSegmentsCount = new Set(allAlerts.map((a) => a.segmentId)).size;
+
+    return {
+      source: isGoogleAvailable ? "google" : "estimated",
+      segments,
+      trafficSummary: {
+        hasSignificantDelay,
+        totalTrafficDelayMinutes,
+        delayedSegmentsCount,
+        alerts: allAlerts,
+      },
+    };
   } catch (err) {
     recordGoogleMapsError("buildRouteGeometry", err);
     return {
@@ -206,7 +383,14 @@ export async function buildRouteGeometry(
       segments: segmentDefs.map((seg) => ({
         segmentId: seg.segmentId,
         path: seg.waypoints,
+        legs: [],
       })),
+      trafficSummary: {
+        hasSignificantDelay: false,
+        totalTrafficDelayMinutes: 0,
+        delayedSegmentsCount: 0,
+        alerts: [],
+      },
     };
   }
 }

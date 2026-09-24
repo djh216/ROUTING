@@ -187,7 +187,7 @@ export default function RoutePrintModal({
               </h2>
               <p className="route-print-sheet__meta">
                 Delivery {segment.deliveryDate} · Batch {plan.batchId} · {v.stopCount} stop
-                {v.stopCount !== 1 ? "s" : ""} · {v.totalCases} cases · {v.totalMiles} mi
+                {v.stopCount !== 1 ? "s" : ""} · {v.totalMiles} mi
               </p>
               <p className="route-print-sheet__meta">
                 Depot: {plan.depot.address}, {plan.depot.city} · Printed {formatDateTime(new Date())}
@@ -216,7 +216,6 @@ export default function RoutePrintModal({
                     <th>Address</th>
                     <th>Contact</th>
                     <th style={{ width: "65px", textAlign: "center" }}>ETA</th>
-                    <th style={{ width: "50px", textAlign: "center" }}>Cases</th>
                     <th>Instructions</th>
                   </tr>
                 </thead>
@@ -238,7 +237,6 @@ export default function RoutePrintModal({
                         <td className="route-print-table__eta" style={{ textAlign: "center", fontWeight: "bold" }}>
                           {v.stopEtas[stop.id] ?? "—"}
                         </td>
-                        <td style={{ textAlign: "center" }}>{stop.cases ?? "—"}</td>
                         <td className="route-print-table__instructions">
                           {stop.deliveryInstructions || "—"}
                         </td>
@@ -249,7 +247,7 @@ export default function RoutePrintModal({
                           style={{ background: "#fef3c7", color: "#92400e", fontWeight: "bold" }}
                         >
                           <td style={{ textAlign: "center" }}>—</td>
-                          <td colSpan={6}>
+                          <td colSpan={5}>
                             *** {DRIVER_BREAK_MINUTES} MIN DRIVER BREAK ***
                           </td>
                         </tr>

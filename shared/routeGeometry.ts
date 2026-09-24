@@ -5,6 +5,68 @@ export interface LatLng {
   lng: number;
 }
 
+export type TrafficDelayLevel = "normal" | "moderate" | "significant";
+
+export interface RouteLegInfo {
+  legIndex: number;
+  segmentId: string;
+  fromName: string;
+  toName: string;
+  fromStopId?: string;
+  toStopId?: string;
+  fromCoords: LatLng;
+  toCoords: LatLng;
+  path: LatLng[];
+  driveMinutes?: number;
+  baseMinutes?: number;
+  trafficMinutes?: number;
+  delayLevel: TrafficDelayLevel;
+  delayPercentage?: number;
+}
+
+export interface SegmentTrafficAlert {
+  hasSignificantDelay: boolean;
+  maxDelayMinutes: number;
+  totalDelayMinutes: number;
+  delayedLegsCount: number;
+  alerts: Array<{
+    legIndex: number;
+    fromName: string;
+    toName: string;
+    delayMinutes: number;
+    driveMinutes: number;
+    baseMinutes: number;
+    delayLevel: TrafficDelayLevel;
+  }>;
+}
+
+export interface SegmentGeometry {
+  segmentId: string;
+  path: LatLng[];
+  legs?: RouteLegInfo[];
+  trafficAlert?: SegmentTrafficAlert;
+}
+
+export interface RouteGeometryResult {
+  source: "google" | "estimated";
+  segments: SegmentGeometry[];
+  trafficSummary?: {
+    hasSignificantDelay: boolean;
+    totalTrafficDelayMinutes: number;
+    delayedSegmentsCount: number;
+    alerts: Array<{
+      segmentId: string;
+      segmentLabel: string;
+      fromName: string;
+      toName: string;
+      delayMinutes: number;
+      driveMinutes: number;
+      baseMinutes: number;
+      delayLevel: TrafficDelayLevel;
+    }>;
+  };
+}
+
 export interface SegmentWaypoints {
   segmentId: string;
   label: string;

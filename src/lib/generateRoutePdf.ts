@@ -54,7 +54,7 @@ export function generateRoutePdf(
   doc.setFont("helvetica", "bold");
   doc.setFontSize(9);
   doc.setTextColor(51, 65, 85);
-  doc.text(`Stops: ${v.stopCount}    Total Cases: ${v.totalCases}    Total Miles: ${v.totalMiles} mi`, 50, 126);
+  doc.text(`Stops: ${v.stopCount}    Total Miles: ${v.totalMiles} mi`, 50, 126);
 
   doc.setFont("helvetica", "normal");
   doc.setFontSize(8.5);
@@ -89,7 +89,6 @@ export function generateRoutePdf(
         ? `${stop.contactName ?? ""}\n${stop.contactPhone ?? ""}`.trim()
         : "—",
       v.stopEtas[stop.id] ?? "—",
-      stop.cases ?? "—",
       stop.deliveryInstructions || "—",
     ]);
 
@@ -100,7 +99,6 @@ export function generateRoutePdf(
         "",
         "",
         "",
-        "",
         "Mandatory Rest",
       ]);
     }
@@ -108,7 +106,7 @@ export function generateRoutePdf(
 
   autoTable(doc, {
     startY,
-    head: [["#", "Customer / Restaurant", "Address", "Contact", "ETA", "Cases", "Instructions"]],
+    head: [["#", "Customer / Restaurant", "Address", "Contact", "ETA", "Instructions"]],
     body: tableRows,
     margin: { left: 40, right: 40 },
     theme: "striped",
@@ -126,12 +124,11 @@ export function generateRoutePdf(
     },
     columnStyles: {
       0: { cellWidth: 22, halign: "center" },
-      1: { cellWidth: 105, fontStyle: "bold" },
-      2: { cellWidth: 110 },
-      3: { cellWidth: 80 },
-      4: { cellWidth: 45, halign: "center", fontStyle: "bold" },
-      5: { cellWidth: 35, halign: "center" },
-      6: { cellWidth: "auto" },
+      1: { cellWidth: 120, fontStyle: "bold" },
+      2: { cellWidth: 130 },
+      3: { cellWidth: 90 },
+      4: { cellWidth: 50, halign: "center", fontStyle: "bold" },
+      5: { cellWidth: "auto" },
     },
     didParseCell: (data) => {
       // Highlight driver break row

@@ -37,6 +37,7 @@ import {
   type TravelMatrix,
 } from "./travel-time.js";
 import { getStopPriorityFilter } from "./route-priorities.js";
+import { isGoogleMapsBlocked } from "./google-maps-status.js";
 
 export { cutoffDateTime, deliveryDateForCycle, isOrderEligible } from "./scheduling.js";
 
@@ -938,7 +939,7 @@ function validateSegment(
 
   if (totalCases > segment.truckCapacity) {
     errors.push(
-      `Segment exceeds capacity (${totalCases}/${segment.truckCapacity} cases)`
+      `Segment exceeds truck capacity`
     );
   }
 
@@ -1071,7 +1072,7 @@ export async function revalidatePlanSegments(
   let prevLng = SCRANTON_DEPOT.lng;
   let rollingTrafficApplied = false;
   const googleKey = apiKey ?? process.env.GOOGLE_MAPS_API_KEY;
-  const useRollingTraffic = matrix.source === "google" && !!googleKey;
+  const useRollingTraffic = !!googleKey && !isGoogleMapsBlocked();
 
   for (let i = 0; i < updated.length; i++) {
     const prevEnd =

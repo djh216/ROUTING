@@ -33,6 +33,8 @@ interface RouteViewProps {
   onReoptimizeSegment?: (segmentId: string) => void;
   onReoptimizeAllSegments?: () => void;
   onAssignTruck?: (stopId: string, truckNumber: number) => void;
+  onDeliveryInstructionsChange?: (stopId: string, instructions: string) => void;
+  onContactChange?: (stopId: string, contactName: string, contactPhone: string) => void;
   mapGeometryRefreshKey: number;
 }
 
@@ -57,10 +59,12 @@ export default function RouteView({
   onReoptimizeSegment,
   onReoptimizeAllSegments,
   onAssignTruck,
+  onDeliveryInstructionsChange,
+  onContactChange,
   mapGeometryRefreshKey,
 }: RouteViewProps) {
   const mapPreviewSegments = plan.manualTruckAssignment ? null : previewSegments;
-  const { geometryPaths, geometrySource, loading: geometryLoading } = useRouteGeometry(
+  const { geometrySegments, geometryPaths, trafficSummary, geometrySource, loading: geometryLoading } = useRouteGeometry(
     cycleId,
     plan,
     mapPreviewSegments,
@@ -73,7 +77,9 @@ export default function RouteView({
         plan={plan}
         previewSegments={mapPreviewSegments}
         activeStopId={activeStopId}
+        geometrySegments={geometrySegments}
         geometryPaths={geometryPaths}
+        trafficSummary={trafficSummary}
         geometrySource={geometrySource}
         geometryLoading={geometryLoading}
       />
@@ -95,6 +101,8 @@ export default function RouteView({
         onReoptimizeSegment={onReoptimizeSegment}
         onReoptimizeAllSegments={onReoptimizeAllSegments}
         onAssignTruck={onAssignTruck}
+        onDeliveryInstructionsChange={onDeliveryInstructionsChange}
+        onContactChange={onContactChange}
       />
     </div>
   );

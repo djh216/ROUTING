@@ -46,6 +46,29 @@ export function getCustomerById(id: string): Customer | undefined {
   return customers.find((c) => c.id === id);
 }
 
+export function updateCustomerContact(
+  customerId: string,
+  contactName: string,
+  contactPhone: string
+): Customer | null {
+  const customer = customers.find((c) => c.id === customerId);
+  if (!customer) return null;
+  const normalized = normalizeContactFields(contactName, contactPhone);
+  customer.contactName = normalized.contactName;
+  customer.contactPhone = normalized.contactPhone;
+  return customer;
+}
+
+export function updateCustomerDeliveryInstructions(
+  customerId: string,
+  deliveryInstructions: string
+): Customer | null {
+  const customer = customers.find((c) => c.id === customerId);
+  if (!customer) return null;
+  customer.deliveryInstructions = deliveryInstructions.trim();
+  return customer;
+}
+
 export function getUploadSummary(): CustomerUploadSummary | null {
   return uploadSummary;
 }
@@ -334,15 +357,6 @@ export function applyOrderSelection(
   orders = [];
 
   selections.forEach((sel, idx) => {
-    if (sel.cases < MIN_ORDER_CASES) {
-      if (sel.cases > 0) {
-        const customer = getCustomerById(sel.customerId);
-        errors.push(
-          `Minimum order is ${MIN_ORDER_CASES} cases (${customer?.name ?? sel.customerId})`
-        );
-      }
-      return;
-    }
     const customer = getCustomerById(sel.customerId);
     if (!customer) {
       errors.push(`Unknown customer: ${sel.customerId}`);
@@ -355,7 +369,7 @@ export function applyOrderSelection(
         customerId: customer.id,
         territoryId: customer.territoryId,
         cycleId,
-        cases: sel.cases,
+        cases: sel.cases ?? 1,
         approvedAt: defaultApprovedAt(cycleId, referenceDate),
         status: "approved",
       });

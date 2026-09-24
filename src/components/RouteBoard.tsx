@@ -13,7 +13,7 @@ import {
 } from "@dnd-kit/core";
 import { SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { Fragment, useMemo, useState, type KeyboardEvent, type Key } from "react";
+import { Fragment, useEffect, useMemo, useState, type KeyboardEvent, type Key } from "react";
 import type { RoutePlan, Segment, SegmentValidation, Stop } from "@shared/types";
 import { DRIVER_BREAK_MINUTES, SERVICE_MINUTES_PER_STOP } from "@shared/constants";
 import {
@@ -55,6 +55,8 @@ interface RouteBoardProps {
   onReoptimizeSegment?: (segmentId: string) => void;
   onReoptimizeAllSegments?: () => void;
   onAssignTruck?: (stopId: string, truckNumber: number) => void;
+  onDeliveryInstructionsChange?: (stopId: string, instructions: string) => void;
+  onContactChange?: (stopId: string, contactName: string, contactPhone: string) => void;
 }
 
 function driverBreakDragId(segmentId: string): string {
@@ -435,6 +437,8 @@ function StopCard({
   onDriveTimeChange,
   onServiceTimeChange,
   onAssignTruck,
+  onDeliveryInstructionsChange,
+  onContactChange,
 }: {
   stop: Stop;
   eta?: string;
@@ -451,8 +455,78 @@ function StopCard({
   onDriveTimeChange?: (minutes: number | null) => void;
   onServiceTimeChange?: (minutes: number | null) => void;
   onAssignTruck?: (truckNumber: number) => void;
+  onDeliveryInstructionsChange?: (stopId: string, instructions: string) => void;
+  onContactChange?: (stopId: string, contactName: string, contactPhone: string) => void;
 }) {
-  const hasDetails = Boolean(stop.contactName || stop.contactPhone || stop.deliveryInstructions);
+  const [isEditingInstructions, setIsEditingInstructions] = useState(false);
+  const [draftInstructions, setDraftInstructions] = useState(stop.deliveryInstructions || "");
+
+  const [isEditingContact, setIsEditingContact] = useState(false);
+  const [draftContactName, setDraftContactName] = useState(stop.contactName || "");
+  const [draftContactPhone, setDraftContactPhone] = useState(stop.contactPhone || "");
+
+  useEffect(() => {
+    if (!isEditingInstructions) {
+      setDraftInstructions(stop.deliveryInstructions || "");
+    }
+  }, [stop.deliveryInstructions, isEditingInstructions]);
+
+  useEffect(() => {
+    if (!isEditingContact) {
+      setDraftContactName(stop.contactName || "");
+      setDraftContactPhone(stop.contactPhone || "");
+    }
+  }, [stop.contactName, stop.contactPhone, isEditingContact]);
+
+  const handleSaveContact = () => {
+    if (onContactChange) {
+      onContactChange(stop.id, draftContactName.trim(), draftContactPhone.trim());
+    }
+    setIsEditingContact(false);
+  };
+
+  const handleCancelContact = () => {
+    setDraftContactName(stop.contactName || "");
+    setDraftContactPhone(stop.contactPhone || "");
+    setIsEditingContact(false);
+  };
+
+  const handleClearContact = () => {
+    setDraftContactName("");
+    setDraftContactPhone("");
+    if (onContactChange) {
+      onContactChange(stop.id, "", "");
+    }
+    setIsEditingContact(false);
+  };
+
+  const handleSaveInstructions = () => {
+    if (onDeliveryInstructionsChange) {
+      onDeliveryInstructionsChange(stop.id, draftInstructions.trim());
+    }
+    setIsEditingInstructions(false);
+  };
+
+  const handleCancelInstructions = () => {
+    setDraftInstructions(stop.deliveryInstructions || "");
+    setIsEditingInstructions(false);
+  };
+
+  const handleClearInstructions = () => {
+    setDraftInstructions("");
+    if (onDeliveryInstructionsChange) {
+      onDeliveryInstructionsChange(stop.id, "");
+    }
+    setIsEditingInstructions(false);
+  };
+
+  const hasDetails = Boolean(
+    stop.contactName ||
+    stop.contactPhone ||
+    stop.deliveryInstructions ||
+    onDeliveryInstructionsChange ||
+    onContactChange
+  );
   const hasControls = Boolean(
     (onAssignTruck && currentTruck != null) ||
     driveMinutes != null ||
@@ -475,13 +549,174 @@ function StopCard({
 
         {hasDetails && (
           <div className="stop-card__row stop-card__row--details">
-            {(stop.contactName || stop.contactPhone) && (
-              <span className="stop-card__contact">
-                Contact: <ContactDisplay contactName={stop.contactName} contactPhone={stop.contactPhone} />
-              </span>
+            {isEditingContact ? (
+              <div
+                className="stop-card__contact-editor"
+                onPointerDown={(e) => e.stopPropagation()}
+                onClick={(e) => e.stopPropagation()}
+              >
+                <div className="stop-card__contact-editor-fields">
+                  <input
+                    type="text"
+                    className="stop-card__contact-input"
+                    value={draftContactName}
+                    placeholder="Contact name (e.g. Maria Santos)"
+                    autoFocus
+                    onChange={(e) => setDraftContactName(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        handleSaveContact();
+                      } else if (e.key === "Escape") {
+                        e.preventDefault();
+                        handleCancelContact();
+                      }
+                    }}
+                  />
+                  <input
+                    type="text"
+                    className="stop-card__contact-input"
+                    value={draftContactPhone}
+                    placeholder="Phone number (e.g. 570-555-0199)"
+                    onChange={(e) => setDraftContactPhone(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        handleSaveContact();
+                      } else if (e.key === "Escape") {
+                        e.preventDefault();
+                        handleCancelContact();
+                      }
+                    }}
+                  />
+                </div>
+                <div className="stop-card__instructions-editor-btns">
+                  {(stop.contactName || stop.contactPhone) && (
+                    <button
+                      type="button"
+                      className="stop-card__instructions-clear-btn"
+                      onClick={handleClearContact}
+                      title="Clear contact"
+                    >
+                      Clear
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    className="stop-card__instructions-cancel-btn"
+                    onClick={handleCancelContact}
+                    title="Cancel editing"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    className="stop-card__instructions-save-btn"
+                    onClick={handleSaveContact}
+                    title="Save contact"
+                  >
+                    Save
+                  </button>
+                </div>
+              </div>
+            ) : (
+              (stop.contactName || stop.contactPhone || onContactChange) && (
+                <span className="stop-card__contact">
+                  <span className="stop-card__contact-text">
+                    Contact: <ContactDisplay contactName={stop.contactName} contactPhone={stop.contactPhone} />
+                  </span>
+                  {onContactChange && (
+                    <button
+                      type="button"
+                      className="stop-card__contact-edit-toggle"
+                      title={stop.contactName || stop.contactPhone ? "Edit contact details" : "Add contact details"}
+                      onPointerDown={(e) => e.stopPropagation()}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setDraftContactName(stop.contactName || "");
+                        setDraftContactPhone(stop.contactPhone || "");
+                        setIsEditingContact(true);
+                      }}
+                    >
+                      {stop.contactName || stop.contactPhone ? "✏️ Edit contact" : "+ Add contact"}
+                    </button>
+                  )}
+                </span>
+              )
             )}
-            {stop.deliveryInstructions && (
-              <span className="stop-card__instructions">Note: {stop.deliveryInstructions}</span>
+            {isEditingInstructions ? (
+              <div
+                className="stop-card__instructions-editor"
+                onPointerDown={(e) => e.stopPropagation()}
+                onClick={(e) => e.stopPropagation()}
+              >
+                <input
+                  type="text"
+                  className="stop-card__instructions-input"
+                  value={draftInstructions}
+                  placeholder="Delivery instructions (dock, gate code, call ahead)..."
+                  autoFocus
+                  onChange={(e) => setDraftInstructions(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      handleSaveInstructions();
+                    } else if (e.key === "Escape") {
+                      e.preventDefault();
+                      handleCancelInstructions();
+                    }
+                  }}
+                />
+                <div className="stop-card__instructions-editor-btns">
+                  {stop.deliveryInstructions && (
+                    <button
+                      type="button"
+                      className="stop-card__instructions-clear-btn"
+                      onClick={handleClearInstructions}
+                      title="Clear instructions"
+                    >
+                      Clear
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    className="stop-card__instructions-cancel-btn"
+                    onClick={handleCancelInstructions}
+                    title="Cancel editing"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    className="stop-card__instructions-save-btn"
+                    onClick={handleSaveInstructions}
+                    title="Save instructions"
+                  >
+                    Save
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="stop-card__instructions-display">
+                {stop.deliveryInstructions ? (
+                  <span className="stop-card__instructions">Note: {stop.deliveryInstructions}</span>
+                ) : null}
+                {onDeliveryInstructionsChange && (
+                  <button
+                    type="button"
+                    className="stop-card__instructions-edit-toggle"
+                    title={stop.deliveryInstructions ? "Edit delivery instructions" : "Add delivery instructions"}
+                    onPointerDown={(e) => e.stopPropagation()}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setDraftInstructions(stop.deliveryInstructions || "");
+                      setIsEditingInstructions(true);
+                    }}
+                  >
+                    {stop.deliveryInstructions ? "✏️ Edit note" : "+ Add note"}
+                  </button>
+                )}
+              </div>
             )}
           </div>
         )}
@@ -547,6 +782,8 @@ function SortableStop({
   onDriveTimeChange,
   onServiceTimeChange,
   onAssignTruck,
+  onDeliveryInstructionsChange,
+  onContactChange,
 }: {
   stop: Stop;
   eta?: string;
@@ -563,6 +800,8 @@ function SortableStop({
   onDriveTimeChange?: (minutes: number | null) => void;
   onServiceTimeChange?: (minutes: number | null) => void;
   onAssignTruck?: (truckNumber: number) => void;
+  onDeliveryInstructionsChange?: (stopId: string, instructions: string) => void;
+  onContactChange?: (stopId: string, contactName: string, contactPhone: string) => void;
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: stop.id,
@@ -593,6 +832,8 @@ function SortableStop({
         onDriveTimeChange={onDriveTimeChange}
         onServiceTimeChange={onServiceTimeChange}
         onAssignTruck={onAssignTruck}
+        onDeliveryInstructionsChange={onDeliveryInstructionsChange}
+        onContactChange={onContactChange}
       />
     </div>
   );
@@ -628,6 +869,8 @@ function SegmentColumn({
   truckNumber,
   onAssignTruck,
   onPrintPdf,
+  onDeliveryInstructionsChange,
+  onContactChange,
 }: {
   key?: Key;
   segment: Segment;
@@ -649,6 +892,8 @@ function SegmentColumn({
   reoptimizing?: boolean;
   onAssignTruck?: (stopId: string, truckNumber: number) => void;
   onPrintPdf?: () => void;
+  onDeliveryInstructionsChange?: (stopId: string, instructions: string) => void;
+  onContactChange?: (stopId: string, contactName: string, contactPhone: string) => void;
 }) {
   const stopIds = stops.map((s) => s.id);
   const v = segment.validation;
@@ -666,8 +911,6 @@ function SegmentColumn({
             <span className="segment-column__date">{segment.deliveryDate}</span>
             <div className="segment-column__stats">
               <span>{v.stopCount} stops</span>
-              <span className="segment-column__stat-sep">·</span>
-              <span>{v.totalCases} cases</span>
               <span className="segment-column__stat-sep">·</span>
               <span>{v.totalMiles} mi</span>
             </div>
@@ -802,6 +1045,8 @@ function SegmentColumn({
                     ? (targetTruck) => onAssignTruck(stop.id, targetTruck)
                     : undefined
                 }
+                onDeliveryInstructionsChange={onDeliveryInstructionsChange}
+                onContactChange={onContactChange}
               />
               {driverBreakEnabled && v.driverBreakAfterStopId === stop.id && (
                 <DraggableDriverBreak segmentId={segment.id} disabled={disabled} />
@@ -848,6 +1093,8 @@ export default function RouteBoard({
   onReoptimizeSegment,
   onReoptimizeAllSegments,
   onAssignTruck,
+  onDeliveryInstructionsChange,
+  onContactChange,
 }: RouteBoardProps) {
   const [activeId, setActiveId] = useState<string | null>(null);
   const [reoptimizingSegmentId, setReoptimizingSegmentId] = useState<string | null>(null);
@@ -1082,6 +1329,8 @@ export default function RouteBoard({
               }
               onAssignTruck={onAssignTruck}
               onPrintPdf={() => setPrintSegment({ segment, stops })}
+              onDeliveryInstructionsChange={onDeliveryInstructionsChange}
+              onContactChange={onContactChange}
             />
           ))}
         </div>
