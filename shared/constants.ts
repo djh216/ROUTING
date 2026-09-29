@@ -24,6 +24,10 @@ export const DEFAULT_TRUCK_CAPACITY = 120;
 export const MIN_ORDER_CASES = 3;
 export const MAX_DRIVER_HOURS = 12;
 export const PITTSBURGH_HAUL_MILES = 280;
+/** Pittsburgh multi-day runs: Wednesday, Thursday, and an optional Friday. */
+export const PITTSBURGH_MAX_DAYS = 3;
+/** assign-day target that creates the next Pittsburgh day and moves the stop onto it. */
+export const NEW_DAY_SEGMENT_ID = "new-day";
 
 export const DAY_INDEX: Record<string, number> = {
   sunday: 0,

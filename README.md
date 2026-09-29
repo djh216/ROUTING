@@ -7,7 +7,7 @@ Route planning app for a Pennsylvania wine distributor operating from **Scranton
 - **8 territories** with schedules from `Territories and Delivery.xlsx`
 - **Territory cutoffs** — orders approved by cutoff must ship on the next delivery day
 - **Scranton hub** — all routes depart from 310 Genet Street, Scranton PA
-- **Pittsburgh multi-day** — Tuesday 2:30 PM cutoff; Wednesday primary + Thursday overflow; truck stays out overnight (no warehouse return between days)
+- **Pittsburgh multi-day** — Tuesday 2:30 PM cutoff; Wednesday primary, Thursday overflow, and an optional Friday. The planner adds Friday when Thursday cannot finish the run, and you can add it yourself. The truck stays out overnight (no warehouse return between days)
 - **Variable Wed threshold** — auto-suggested stop count for Pittsburgh; slider + drag-and-drop override
 - **Route Board** — drag-and-drop stop reordering and cross-segment moves for all routes (days for Pittsburgh, trucks for other territories)
 - **Live validation** — ETAs checked against 10 AM – 4 PM delivery windows and driver hours
@@ -89,7 +89,7 @@ npm run dev
 | Philadelphia (cycle 2) | Wed 2:30 PM | Thu 10 AM – 4 PM |
 | Western Philly Suburbs | Tue 2:30 PM | Wed |
 | Southern Susquehanna Valley | Tue 2:30 PM | Wed |
-| Pittsburgh | Tue 2:30 PM | Wed + Thu overflow |
+| Pittsburgh | Tue 2:30 PM | Wed + Thu overflow, optional Fri |
 | Northern Philly Suburbs | Wed 2:30 PM | Thu |
 | Northeast PA | Thu 2:30 PM | Fri |
 | Lehigh Valley | Thu 2:30 PM | Fri |

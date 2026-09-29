@@ -2,6 +2,7 @@ import { CUSTOMERS, ORDERS } from "../data/sample-data.js";
 import { seedCustomerStoreForTests } from "../data/customer-store.js";
 import { TERRITORY_CYCLES } from "../data/territories.js";
 import {
+  appendDaySegment,
   applySegmentStops,
   assignStopToDay,
   assignStopToTruck,
@@ -16,7 +17,7 @@ import {
   setWedThreshold,
   swapSegmentRoutes,
 } from "./planner.js";
-import { SCRANTON_DEPOT } from "../../shared/constants.js";
+import { NEW_DAY_SEGMENT_ID, SCRANTON_DEPOT } from "../../shared/constants.js";
 import { AM_PM_TIME_PATTERN } from "../../shared/timeFormat.js";
 import { createEstimatedTravelMatrix } from "./travel-time.js";
 
@@ -375,4 +376,133 @@ assert(
   "Stop should be back on Wednesday"
 );
 console.log("All multi-day stop day selection tests passed.");
+
+const withFriday = await appendDaySegment(pittsburghPlan, pittsburghRunMatrix);
+assert(withFriday.segments.length === 3, "Adding a day should create Friday");
+assert(withFriday.segments[2].label === "Friday (overflow)", "Third day should be labeled Friday");
+assert(withFriday.segments[0].label === "Wednesday (primary)", "Wednesday label should stay");
+assert(withFriday.segments[1].label === "Thursday (overflow)", "Thursday label should stay");
+assert(withFriday.segments[1].endLocation === "overnight", "Thursday should stay out overnight once Friday exists");
+assert(withFriday.segments[2].startLocation === "overnight", "Friday should start from the previous day's last stop");
+assert(withFriday.segments[2].endLocation === "Scranton", "Friday should return to Scranton");
+assert(withFriday.segments[2].stops.length === 0, "A manually added Friday starts empty");
+assert(
+  withFriday.segments[0].stops.length === pittsburghPlan.segments[0].stops.length,
+  "Adding Friday should not move Wednesday stops"
+);
+
+const stillThree = await appendDaySegment(withFriday, pittsburghRunMatrix);
+assert(stillThree.segments.length === 3, "Pittsburgh should not grow past three days");
+
+const fridayStopId = withFriday.segments[0].stops[0].stopId;
+const assignedFriday = await assignStopToDay(
+  withFriday,
+  fridayStopId,
+  withFriday.segments[2].id,
+  pittsburghRunMatrix
+);
+assert(
+  assignedFriday.segments[2].stops.some((s) => s.stopId === fridayStopId),
+  "Stop can be assigned to Friday"
+);
+assert(
+  !assignedFriday.segments[0].stops.some((s) => s.stopId === fridayStopId),
+  "Assigned stop should leave Wednesday"
+);
+const fridayFirst = assignedFriday.segments[2].stops[0]?.stopId;
+if (fridayFirst) {
+  assert(
+    assignedFriday.segments[2].validation.stopEtas[fridayFirst] === "10:00 AM",
+    "Friday first stop must be at 10:00 AM"
+  );
+}
+
+const wedBeforeSwap = assignedFriday.segments[0].stops.map((s) => s.stopId);
+const friBeforeSwap = assignedFriday.segments[2].stops.map((s) => s.stopId);
+const swappedWithFriday = await swapSegmentRoutes(
+  assignedFriday,
+  assignedFriday.segments[0].id,
+  assignedFriday.segments[2].id,
+  pittsburghRunMatrix
+);
+assert(
+  swappedWithFriday.segments[0].stops.map((s) => s.stopId).join(",") === friBeforeSwap.join(","),
+  "Wednesday should receive Friday's stops when those days are switched"
+);
+assert(
+  swappedWithFriday.segments[2].stops.map((s) => s.stopId).join(",") === wedBeforeSwap.join(","),
+  "Friday should receive Wednesday's stops when those days are switched"
+);
+assert(swappedWithFriday.segments[2].label === "Friday (overflow)", "Swap should keep the Friday column");
+
+const stopForNewDay =
+  pittsburghPlan.segments[1].stops[0]?.stopId ?? pittsburghPlan.segments[0].stops[0].stopId;
+const createdByAssign = await assignStopToDay(
+  pittsburghPlan,
+  stopForNewDay,
+  NEW_DAY_SEGMENT_ID,
+  pittsburghRunMatrix
+);
+assert(createdByAssign.segments.length === 3, "Choosing day 3 should add Friday");
+assert(
+  createdByAssign.segments[2].stops.some((s) => s.stopId === stopForNewDay),
+  "Day 3 assignment should place the stop on Friday"
+);
+
+const fridayKeptId = createdByAssign.segments[2].stops[0].stopId;
+const wedCountBefore = createdByAssign.segments[0].stops.length;
+const afterThreshold = await setWedThreshold(
+  createdByAssign,
+  Math.max(0, wedCountBefore - 1),
+  pittsburghRunMatrix
+);
+assert(afterThreshold.segments.length === 3, "Wed threshold should keep Friday");
+assert(
+  afterThreshold.segments[2].stops.some((s) => s.stopId === fridayKeptId),
+  "Lowering the Wednesday threshold should leave Friday stops on Friday"
+);
+assert(
+  afterThreshold.segments.flatMap((s) => s.stops).length === createdByAssign.allStops.length,
+  "Threshold changes should not duplicate or drop stops"
+);
+
+const farCustomers = [0, 1].map((i) => ({
+  id: `far${i}`,
+  name: `Honolulu Stop ${i + 1}`,
+  address: `${i + 1} Kalakaua Ave`,
+  city: "Honolulu",
+  territoryId: "pittsburgh",
+  lat: 21.3,
+  lng: -157.8 - i * 0.05,
+  contactName: "Alex",
+  contactPhone: "808-555-0100",
+  deliveryInstructions: "",
+}));
+const farOrders = farCustomers.map((customer, i) => ({
+  id: `ofar${i}`,
+  customerId: customer.id,
+  territoryId: "pittsburgh",
+  cycleId: "pittsburgh",
+  cases: 6,
+  approvedAt: "2026-09-08T11:00:00",
+  status: "approved" as const,
+}));
+seedCustomerStoreForTests([...CUSTOMERS, ...farCustomers], [...ORDERS, ...farOrders]);
+const { plan: longPittsburgh } = await buildRoutePlan(
+  "pittsburgh",
+  [...ORDERS, ...farOrders],
+  REF
+);
+assert(
+  longPittsburgh.segments.length === 3,
+  `Planner should add Friday when Thursday cannot finish the run, got ${longPittsburgh.segments.length} days`
+);
+assert(longPittsburgh.segments[2].label === "Friday (overflow)", "Auto-added day should be Friday");
+assert(longPittsburgh.segments[1].endLocation === "overnight", "Thursday should not return when Friday is used");
+assert(longPittsburgh.segments[2].endLocation === "Scranton", "Friday should be the day that returns to Scranton");
+assert(
+  longPittsburgh.segments[2].stops.length > 0,
+  "Friday should receive the stops Thursday cannot cover"
+);
+console.log("All Pittsburgh third-day tests passed.");
 

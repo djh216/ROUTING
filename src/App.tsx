@@ -6,6 +6,7 @@ import RoutePrintSheet from "./components/RoutePrintSheet";
 import RouteTabs from "./components/RouteTabs";
 import RouteView from "./components/RouteView";
 import {
+  addDay,
   addTruck,
   assignStopToDay,
   assignStopToTruck,
@@ -111,6 +112,18 @@ export default function App() {
     const updated = await addTruck(selectedCycleId);
     setPlan(updated);
   }, [selectedCycleId]);
+
+  const handleAddDay = useCallback(async () => {
+    if (!selectedCycleId) return;
+    try {
+      const updated = await addDay(selectedCycleId);
+      setPlan(updated);
+      setPreviewSegments(null);
+      refreshMapGeometry();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to add Friday");
+    }
+  }, [selectedCycleId, refreshMapGeometry]);
 
   const handleReoptimizeSegment = useCallback(
     async (segmentId: string) => {
@@ -449,7 +462,7 @@ export default function App() {
               <p className="main__cutoff">
                 Cutoff {formatDateTime(selectedBatch.cutoffAt)} ·
                 {selectedBatch.multiDay
-                  ? " Multi-day route (truck stays out overnight)"
+                  ? " Multi-day route — Wednesday, Thursday, and optional Friday; truck stays out overnight"
                   : plan.manualTruckAssignment
                     ? " Manual truck assignment — all stops start on Truck 1; drag to split"
                     : " Same-day return to Scranton"}
@@ -497,6 +510,11 @@ export default function App() {
               }
               onAddTruck={
                 !plan.segments.some((s) => s.segmentType === "day") ? handleAddTruck : undefined
+              }
+              onAddDay={
+                plan.segments.some((s) => s.segmentType === "day") && plan.status !== "locked"
+                  ? handleAddDay
+                  : undefined
               }
               onDriveTimeChange={
                 plan.status !== "locked"

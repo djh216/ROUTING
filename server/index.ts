@@ -24,6 +24,7 @@ import {
 import { uniqueTerritories } from "./data/territories.js";
 import {
   applySegmentStops,
+  appendDaySegment,
   appendTruckSegment,
   assignStopToDay,
   assignStopToTruck,
@@ -621,6 +622,22 @@ app.post("/api/routes/:cycleId/assign-truck", async (req, res) => {
     res.status(500).json({
       error: e instanceof Error ? e.message : "Failed to assign stop to truck",
     });
+  }
+});
+
+app.post("/api/routes/:cycleId/add-day", async (req, res) => {
+  try {
+    const plan = await getOrCreatePlan(req.params.cycleId);
+    if (plan.status === "locked") {
+      res.status(400).json({ error: "Route is locked" });
+      return;
+    }
+    const matrix = getMatrixForCycle(req.params.cycleId, plan);
+    const updated = await appendDaySegment(plan, matrix);
+    routePlans.set(req.params.cycleId, updated);
+    res.json(updated);
+  } catch (e) {
+    res.status(500).json({ error: e instanceof Error ? e.message : "Failed to add day" });
   }
 });
 

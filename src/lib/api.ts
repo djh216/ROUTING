@@ -344,6 +344,12 @@ export async function updateStopContact(
   return res.json();
 }
 
+export async function addDay(cycleId: string): Promise<RoutePlan> {
+  const res = await fetch(`${API}/routes/${cycleId}/add-day`, { method: "POST" });
+  if (!res.ok) throw new Error("Failed to add day");
+  return res.json();
+}
+
 export async function addTruck(cycleId: string): Promise<RoutePlan> {
   const res = await fetch(`${API}/routes/${cycleId}/add-truck`, { method: "POST" });
   if (!res.ok) throw new Error("Failed to add truck");

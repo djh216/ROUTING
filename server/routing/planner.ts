@@ -2,6 +2,8 @@ import {
   DEFAULT_TRUCK_CAPACITY,
   DRIVER_BREAK_MINUTES,
   MAX_DRIVER_HOURS,
+  NEW_DAY_SEGMENT_ID,
+  PITTSBURGH_MAX_DAYS,
   SCRANTON_DEPOT,
   SERVICE_MINUTES_PER_STOP,
   driverBreakAfterStopIndex,
@@ -70,6 +72,52 @@ function addDays(base: Date, days: number): Date {
   const d = new Date(base);
   d.setDate(d.getDate() + days);
   return d;
+}
+
+const PITTSBURGH_DAY_LABELS = [
+  "Wednesday (primary)",
+  "Thursday (overflow)",
+  "Friday (overflow)",
+] as const;
+
+function emptySegmentValidation(): SegmentValidation {
+  return {
+    stopCount: 0,
+    totalCases: 0,
+    totalMiles: 0,
+    totalDriveMinutes: 0,
+    totalRouteMinutes: 0,
+    warnings: [],
+    errors: [],
+    stopEtas: {},
+  };
+}
+
+function multiDayDeliveryDate(deliveryDate: string, dayIndex: number): string {
+  if (dayIndex <= 0) return deliveryDate;
+  return addDays(new Date(deliveryDate), dayIndex).toISOString().slice(0, 10);
+}
+
+function describeMultiDaySegment(dayIndex: number, dayCount: number, deliveryDate: string) {
+  const isFirst = dayIndex === 0;
+  const isLast = dayIndex === dayCount - 1;
+  return {
+    label: PITTSBURGH_DAY_LABELS[dayIndex] ?? `Day ${dayIndex + 1}`,
+    segmentType: "day" as const,
+    sequence: dayIndex,
+    deliveryDate: multiDayDeliveryDate(deliveryDate, dayIndex),
+    startLocation: isFirst ? ("Scranton" as const) : ("overnight" as const),
+    endLocation: isLast ? ("Scranton" as const) : ("overnight" as const),
+  };
+}
+
+function applyMultiDaySegmentMeta(plan: RoutePlan, segments: Segment[]): Segment[] {
+  const cycle = getCycleById(plan.cycleId);
+  if (!cycle?.multiDay) return segments;
+  return segments.map((seg, idx) => ({
+    ...seg,
+    ...describeMultiDaySegment(idx, segments.length, plan.deliveryDate),
+  }));
 }
 
 function stopPoint(stop: Stop): GeoPoint {
@@ -539,6 +587,91 @@ export function suggestWedThreshold(
     else break;
   }
   return best;
+}
+
+function stopsFitOnDay(
+  stops: Stop[],
+  stopMap: Map<string, Stop>,
+  depot: Depot,
+  cycle: TerritoryCycle,
+  matrix: TravelMatrix,
+  start: GeoPoint,
+  returnToDepot: boolean
+): boolean {
+  if (stops.length === 0) return true;
+  const leg = simulateLeg(
+    stops.map((s) => s.id),
+    stopMap,
+    depot,
+    cycle.deliveryStart,
+    cycle.deliveryEnd,
+    start,
+    returnToDepot,
+    matrix
+  );
+  const driverHours = (leg.completionTime - leg.departureTime) / 60;
+  return leg.feasible && driverHours <= MAX_DRIVER_HOURS;
+}
+
+/**
+ * Keep Wednesday as the primary day. Put the rest on Thursday when that day
+ * can return to Scranton. Otherwise add Friday and leave the truck out overnight
+ * between Thursday and Friday.
+ */
+function splitOverflowAcrossDays(
+  wedStops: Stop[],
+  rest: Stop[],
+  stopMap: Map<string, Stop>,
+  depot: Depot,
+  cycle: TerritoryCycle,
+  matrix: TravelMatrix
+): Stop[][] {
+  if (rest.length === 0) return [wedStops, []];
+
+  const day2Start: GeoPoint = wedStops.length
+    ? { lat: wedStops[wedStops.length - 1].lat, lng: wedStops[wedStops.length - 1].lng }
+    : { lat: depot.lat, lng: depot.lng };
+
+  if (stopsFitOnDay(rest, stopMap, depot, cycle, matrix, day2Start, true)) {
+    return [wedStops, rest];
+  }
+
+  let chosen = -1;
+  for (let k = rest.length - 1; k >= 0; k--) {
+    const thursday = rest.slice(0, k);
+    const friday = rest.slice(k);
+    if (friday.length === 0) continue;
+    const fridayStart: GeoPoint = thursday.length
+      ? {
+          lat: thursday[thursday.length - 1].lat,
+          lng: thursday[thursday.length - 1].lng,
+        }
+      : day2Start;
+    const thursdayOk =
+      thursday.length === 0 ||
+      stopsFitOnDay(thursday, stopMap, depot, cycle, matrix, day2Start, false);
+    const fridayOk = stopsFitOnDay(friday, stopMap, depot, cycle, matrix, fridayStart, true);
+    if (thursdayOk && fridayOk) {
+      chosen = k;
+      break;
+    }
+  }
+
+  if (chosen >= 0) {
+    return [wedStops, rest.slice(0, chosen), rest.slice(chosen)];
+  }
+
+  let thuCount = 0;
+  for (let k = 1; k <= rest.length; k++) {
+    if (stopsFitOnDay(rest.slice(0, k), stopMap, depot, cycle, matrix, day2Start, false)) {
+      thuCount = k;
+    } else {
+      break;
+    }
+  }
+  if (thuCount >= rest.length) thuCount = rest.length - 1;
+  if (thuCount < 0) thuCount = 0;
+  return [wedStops, rest.slice(0, thuCount), rest.slice(thuCount)];
 }
 
 function generateOrderedPartitions(ordered: Stop[], truckCount: number): Stop[][][] {
@@ -1292,7 +1425,7 @@ export async function buildRoutePlan(
       matrix
     );
     const wedCount = threshold > 0 ? threshold : Math.min(1, orderedIds.length);
-    if (existingSegmentOverrides?.length === 2) {
+    if (existingSegmentOverrides?.length) {
       segmentGroups = optimizeSegmentOrders(
         existingSegmentOverrides.map((seg) =>
           seg.flatMap((a) => {
@@ -1306,8 +1439,10 @@ export async function buildRoutePlan(
         priorityFilter
       );
     } else {
+      const wedStops = globallyOptimized.slice(0, wedCount);
+      const rest = globallyOptimized.slice(wedCount);
       segmentGroups = optimizeSegmentOrders(
-        [globallyOptimized.slice(0, wedCount), globallyOptimized.slice(wedCount)],
+        splitOverflowAcrossDays(wedStops, rest, stopMap, SCRANTON_DEPOT, cycle, matrix),
         SCRANTON_DEPOT,
         cycle,
         matrix,
@@ -1349,27 +1484,14 @@ export async function buildRoutePlan(
   const orderedIds = segmentGroups.flat().map((s) => s.id);
 
   const segments: Segment[] = segmentGroups.map((group, idx) => {
-    const isPittsburgh = cycle.multiDay;
-    let label: string;
-    let segmentType: Segment["segmentType"] = "truck";
-    let deliveryDateStr = deliveryDate;
-    let startLocation: Segment["startLocation"] = "Scranton";
-    let endLocation: Segment["endLocation"] = "Scranton";
-
-    if (isPittsburgh) {
-      segmentType = "day";
-      if (idx === 0) {
-        label = "Wednesday (primary)";
-        endLocation = "overnight";
-      } else {
-        label = "Thursday (overflow)";
-        deliveryDateStr = addDays(new Date(deliveryDate), 1).toISOString().slice(0, 10);
-        startLocation = "overnight";
-        endLocation = "Scranton";
-      }
-    } else {
-      label = `Truck ${idx + 1}`;
-    }
+    const dayMeta = cycle.multiDay
+      ? describeMultiDaySegment(idx, segmentGroups.length, deliveryDate)
+      : null;
+    const label = dayMeta?.label ?? `Truck ${idx + 1}`;
+    const segmentType: Segment["segmentType"] = dayMeta?.segmentType ?? "truck";
+    const deliveryDateStr = dayMeta?.deliveryDate ?? deliveryDate;
+    const startLocation: Segment["startLocation"] = dayMeta?.startLocation ?? "Scranton";
+    const endLocation: Segment["endLocation"] = dayMeta?.endLocation ?? "Scranton";
 
     const segStops: StopAssignment[] = group.map((s, pos) => ({
       stopId: s.id,
@@ -1388,7 +1510,7 @@ export async function buildRoutePlan(
       stops: segStops,
     };
 
-    return { ...base, validation: { stopCount: 0, totalCases: 0, totalMiles: 0, totalDriveMinutes: 0, totalRouteMinutes: 0, warnings: [], errors: [], stopEtas: {} } };
+    return { ...base, validation: emptySegmentValidation() };
   });
 
   const draftPlan: RoutePlan = {
@@ -1448,11 +1570,14 @@ export async function applySegmentStops(
   travelMatrix?: TravelMatrix
 ): Promise<RoutePlan> {
   const matrix = resolveMatrix(SCRANTON_DEPOT, plan.allStops, travelMatrix);
-  const updatedSegments = plan.segments.map((seg) => {
-    const override = segmentStops.find((s) => s.segmentId === seg.id);
-    const stops = (override?.stops ?? seg.stops).map((s, i) => ({ ...s, position: i }));
-    return { ...seg, stops };
-  });
+  const updatedSegments = applyMultiDaySegmentMeta(
+    plan,
+    plan.segments.map((seg) => {
+      const override = segmentStops.find((s) => s.segmentId === seg.id);
+      const stops = (override?.stops ?? seg.stops).map((s, i) => ({ ...s, position: i }));
+      return { ...seg, stops };
+    })
+  );
 
   const driveMinuteOverrides = migrateDriveMinuteOverrides(plan, updatedSegments);
   const serviceMinuteOverrides = migrateServiceMinuteOverrides(plan, updatedSegments);
@@ -1754,29 +1879,31 @@ export async function setWedThreshold(
     .filter((s): s is Stop => !!s);
 
   const n = Math.max(0, Math.min(threshold, orderedStops.length));
-  const seg0 = plan.segments[0];
-  const seg1 = plan.segments[1];
-  if (!seg0 || !seg1) return plan;
+  if (plan.segments.length < 2) return plan;
 
-  const groups = optimizeSegmentOrders(
-    [orderedStops.slice(0, n), orderedStops.slice(n)],
-    SCRANTON_DEPOT,
-    cycle,
-    matrix
-  );
+  const laterDayByStop = new Map<string, number>();
+  for (let i = 1; i < plan.segments.length; i++) {
+    for (const assignment of plan.segments[i].stops) {
+      laterDayByStop.set(assignment.stopId, i);
+    }
+  }
+
+  const groups: Stop[][] = plan.segments.map(() => []);
+  groups[0] = orderedStops.slice(0, n);
+  for (const stop of orderedStops.slice(n)) {
+    const dayIndex = laterDayByStop.get(stop.id) ?? 1;
+    const idx = Math.min(Math.max(dayIndex, 1), groups.length - 1);
+    groups[idx].push(stop);
+  }
+
+  const optimized = optimizeSegmentOrders(groups, SCRANTON_DEPOT, cycle, matrix);
 
   return applySegmentStops(
     plan,
-    [
-      {
-        segmentId: seg0.id,
-        stops: groups[0].map((s, i) => ({ stopId: s.id, position: i })),
-      },
-      {
-        segmentId: seg1.id,
-        stops: groups[1].map((s, i) => ({ stopId: s.id, position: i })),
-      },
-    ],
+    plan.segments.map((seg, idx) => ({
+      segmentId: seg.id,
+      stops: optimized[idx].map((s, i) => ({ stopId: s.id, position: i })),
+    })),
     matrix
   );
 }
@@ -1840,11 +1967,23 @@ export async function assignStopToDay(
     throw new Error("Stop not found on route");
   }
 
+  const matrix = resolveMatrix(SCRANTON_DEPOT, plan.allStops, travelMatrix);
+  let currentPlan = plan;
   let targetSegment: Segment | undefined;
-  if (typeof targetSegmentIdOrDayIndex === "number") {
-    targetSegment = plan.segments[targetSegmentIdOrDayIndex - 1];
+
+  if (targetSegmentIdOrDayIndex === NEW_DAY_SEGMENT_ID) {
+    if (currentPlan.segments.length < PITTSBURGH_MAX_DAYS) {
+      currentPlan = await appendDaySegment(currentPlan, matrix);
+    }
+    targetSegment = currentPlan.segments[currentPlan.segments.length - 1];
+  } else if (typeof targetSegmentIdOrDayIndex === "number") {
+    const dayNumber = targetSegmentIdOrDayIndex;
+    if (dayNumber === currentPlan.segments.length + 1 && dayNumber <= PITTSBURGH_MAX_DAYS) {
+      currentPlan = await appendDaySegment(currentPlan, matrix);
+    }
+    targetSegment = currentPlan.segments[dayNumber - 1];
   } else {
-    targetSegment = plan.segments.find((s) => s.id === targetSegmentIdOrDayIndex);
+    targetSegment = currentPlan.segments.find((s) => s.id === targetSegmentIdOrDayIndex);
   }
 
   if (!targetSegment) {
@@ -1852,12 +1991,11 @@ export async function assignStopToDay(
   }
 
   if (fromSegment.id === targetSegment.id) {
-    return plan;
+    return currentPlan;
   }
 
-  const matrix = resolveMatrix(SCRANTON_DEPOT, plan.allStops, travelMatrix);
   return moveStopBetweenSegments(
-    plan,
+    currentPlan,
     stopId,
     fromSegment.id,
     targetSegment.id,
@@ -2005,6 +2143,38 @@ export async function swapSegmentRoutes(
   return applySegmentStops(basePlan, segmentStops, matrix);
 }
 
+export async function appendDaySegment(
+  plan: RoutePlan,
+  travelMatrix?: TravelMatrix
+): Promise<RoutePlan> {
+  const cycle = getCycleById(plan.cycleId);
+  if (!cycle?.multiDay) return plan;
+  if (plan.segments.length >= PITTSBURGH_MAX_DAYS) return plan;
+
+  const idx = plan.segments.length;
+  const meta = describeMultiDaySegment(idx, idx + 1, plan.deliveryDate);
+  const newSeg: Segment = {
+    id: `${plan.batchId}-seg-${idx}`,
+    label: meta.label,
+    segmentType: "day",
+    sequence: idx,
+    deliveryDate: meta.deliveryDate,
+    startLocation: meta.startLocation,
+    endLocation: meta.endLocation,
+    truckCapacity: DEFAULT_TRUCK_CAPACITY,
+    stops: [],
+    validation: emptySegmentValidation(),
+  };
+
+  const combined = [...plan.segments, newSeg];
+  const matrix = resolveMatrix(SCRANTON_DEPOT, plan.allStops, travelMatrix);
+  return applySegmentStops(
+    { ...plan, segments: combined },
+    combined.map((s) => ({ segmentId: s.id, stops: s.stops })),
+    matrix
+  );
+}
+
 export async function appendTruckSegment(
   plan: RoutePlan,
   travelMatrix?: TravelMatrix
@@ -2023,16 +2193,7 @@ export async function appendTruckSegment(
     endLocation: "Scranton",
     truckCapacity: DEFAULT_TRUCK_CAPACITY,
     stops: [],
-    validation: {
-      stopCount: 0,
-      totalCases: 0,
-      totalMiles: 0,
-      totalDriveMinutes: 0,
-      totalRouteMinutes: 0,
-      warnings: [],
-      errors: [],
-      stopEtas: {},
-    },
+    validation: emptySegmentValidation(),
   };
 
   const combined = [...plan.segments, newSeg];

@@ -15,7 +15,7 @@ import { SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-
 import { CSS } from "@dnd-kit/utilities";
 import { Fragment, useEffect, useMemo, useState, type KeyboardEvent, type Key } from "react";
 import type { RoutePlan, Segment, SegmentValidation, Stop } from "@shared/types";
-import { DRIVER_BREAK_MINUTES, SERVICE_MINUTES_PER_STOP } from "@shared/constants";
+import { DRIVER_BREAK_MINUTES, NEW_DAY_SEGMENT_ID, PITTSBURGH_MAX_DAYS, SERVICE_MINUTES_PER_STOP } from "@shared/constants";
 import {
   formatDurationMinutes,
   formatTimeOfDay,
@@ -39,6 +39,7 @@ interface RouteBoardProps {
   onStopAdded?: (plan: RoutePlan) => void;
   onWedThresholdChange?: (n: number) => void;
   onAddTruck?: () => void;
+  onAddDay?: () => void;
   onDriveTimeChange?: (
     segmentId: string,
     stopId: string,
@@ -1317,6 +1318,7 @@ export default function RouteBoard({
   onStopAdded,
   onWedThresholdChange,
   onAddTruck,
+  onAddDay,
   onDriveTimeChange,
   onServiceTimeChange,
   onFirstStopTimeChange,
@@ -1358,12 +1360,20 @@ export default function RouteBoard({
 
   const availableDays: DayOption[] = useMemo(() => {
     if (!isMultiDay || plan.segments.length <= 1) return [];
-    return plan.segments.map((seg, idx) => ({
+    const days = plan.segments.map((seg, idx) => ({
       segmentId: seg.id,
       name: getDayShortName(seg.label, idx),
       fullName: seg.label,
     }));
-  }, [isMultiDay, plan.segments]);
+    if (plan.status !== "locked" && plan.segments.length < PITTSBURGH_MAX_DAYS) {
+      days.push({
+        segmentId: NEW_DAY_SEGMENT_ID,
+        name: "Day 3",
+        fullName: "Friday (overflow)",
+      });
+    }
+    return days;
+  }, [isMultiDay, plan.segments, plan.status]);
 
   const isLocked = plan.status === "locked";
 
@@ -1566,6 +1576,11 @@ export default function RouteBoard({
               : "⇄ Switch days"}
           </button>
         )}
+        {isMultiDay && onAddDay && !isLocked && plan.segments.length < PITTSBURGH_MAX_DAYS && (
+          <button type="button" className="btn btn--secondary" onClick={onAddDay}>
+            + Add Friday
+          </button>
+        )}
         {!isMultiDay && onAddTruck && !isLocked && (
           <button type="button" className="btn btn--secondary" onClick={onAddTruck}>
             + Add truck
@@ -1582,9 +1597,9 @@ export default function RouteBoard({
             className="btn btn--secondary"
             disabled={isLocked || flippingAll || flippingSegmentId != null}
             onClick={() => void handleFlipSegment()}
-            title="Flip the route order on all trucks"
+            title={isMultiDay ? "Flip the route order on all days" : "Flip the route order on all trucks"}
           >
-            {flippingAll ? "Flipping all…" : "⇄ Flip all trucks"}
+            {flippingAll ? "Flipping all…" : isMultiDay ? "⇄ Flip all days" : "⇄ Flip all trucks"}
           </button>
         )}
         {canFlip && plan.segments.length === 1 && (
@@ -1605,7 +1620,7 @@ export default function RouteBoard({
             disabled={reoptimizingAll || reoptimizingSegmentId != null}
             onClick={() => void handleReoptimizeAll()}
           >
-            {reoptimizingAll ? "Re-optimizing…" : "Re-optimize all trucks"}
+            {reoptimizingAll ? "Re-optimizing…" : isMultiDay ? "Re-optimize all days" : "Re-optimize all trucks"}
           </button>
         )}
         {onClearRoute && !isLocked && plan.allStops.length > 0 && (
