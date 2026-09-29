@@ -943,6 +943,63 @@ function validateSegment(
     );
   }
 
+  let optimizedRouteMinutes = leg.totalRouteMinutes;
+  let optimizedDriveMinutes = leg.totalDriveMinutes;
+  let timeDiffMinutes = 0;
+  let isOptimizedOrder = true;
+
+  if (stopIds.length >= 2) {
+    const currentStops = stopIds
+      .map((id) => stopMap.get(id))
+      .filter((s): s is Stop => !!s);
+
+    if (currentStops.length >= 2) {
+      const priorityFilter = getStopPriorityFilter(cycle.id);
+      const optStops = optimizeStopOrder(
+        currentStops,
+        start.lat,
+        start.lng,
+        depot,
+        segment.endLocation === "Scranton",
+        matrix,
+        priorityFilter
+      );
+      const optStopIds = optStops.map((s) => s.id);
+
+      isOptimizedOrder =
+        stopIds.length === optStopIds.length &&
+        stopIds.every((id, idx) => id === optStopIds[idx]);
+
+      if (isOptimizedOrder && (!driveOverrides || Object.keys(driveOverrides).length === 0)) {
+        optimizedRouteMinutes = leg.totalRouteMinutes;
+        optimizedDriveMinutes = leg.totalDriveMinutes;
+        timeDiffMinutes = 0;
+      } else {
+        const optBreakIdx =
+          breakAfterStopIndex >= 0 ? driverBreakAfterStopIndex(optStopIds.length) : -1;
+        const optLeg = simulateLeg(
+          optStopIds,
+          stopMap,
+          depot,
+          cycle.deliveryStart,
+          cycle.deliveryEnd,
+          start,
+          segment.endLocation === "Scranton",
+          matrix,
+          undefined,
+          firstStopArrivalMinutes,
+          undefined,
+          undefined,
+          serviceOverrides,
+          optBreakIdx
+        );
+        optimizedRouteMinutes = optLeg.totalRouteMinutes;
+        optimizedDriveMinutes = optLeg.totalDriveMinutes;
+        timeDiffMinutes = leg.totalRouteMinutes - optimizedRouteMinutes;
+      }
+    }
+  }
+
   return {
     departureTime: formatTime(leg.departureTime),
     completionTime: formatTime(leg.completionTime),
@@ -960,6 +1017,10 @@ function validateSegment(
     warnings,
     errors,
     stopEtas: leg.stopEtas,
+    optimizedRouteMinutes,
+    optimizedDriveMinutes,
+    timeDiffMinutes,
+    isOptimizedOrder,
   };
 }
 
@@ -1062,7 +1123,14 @@ export async function revalidatePlanSegments(
   segments: Segment[],
   matrix: TravelMatrix,
   apiKey?: string
-): Promise<{ segments: Segment[]; rollingTrafficApplied: boolean }> {
+): Promise<{
+  segments: Segment[];
+  rollingTrafficApplied: boolean;
+  totalRouteMinutes: number;
+  optimizedRouteMinutes: number;
+  timeDiffMinutes: number;
+  hasManualOrder: boolean;
+}> {
   const cycle = getCycleById(plan.cycleId);
   if (!cycle) throw new Error("Invalid cycle");
 
@@ -1152,7 +1220,28 @@ export async function revalidatePlanSegments(
     }
   }
 
-  return { segments: updated, rollingTrafficApplied };
+  const totalRouteMinutes = updated.reduce(
+    (sum, s) => sum + (s.validation.totalRouteMinutes ?? 0),
+    0
+  );
+  const optimizedRouteMinutes = updated.reduce(
+    (sum, s) =>
+      sum + (s.validation.optimizedRouteMinutes ?? s.validation.totalRouteMinutes ?? 0),
+    0
+  );
+  const timeDiffMinutes = totalRouteMinutes - optimizedRouteMinutes;
+  const hasManualOrder = updated.some(
+    (s) => s.validation.isOptimizedOrder === false || (s.validation.timeDiffMinutes ?? 0) !== 0
+  );
+
+  return {
+    segments: updated,
+    rollingTrafficApplied,
+    totalRouteMinutes,
+    optimizedRouteMinutes,
+    timeDiffMinutes,
+    hasManualOrder,
+  };
 }
 
 export async function buildRoutePlan(
@@ -1317,8 +1406,14 @@ export async function buildRoutePlan(
     manualTruckAssignment: cycle.manualTruckAssignment,
   };
 
-  const { segments: validatedSegments, rollingTrafficApplied } =
-    await revalidatePlanSegments(draftPlan, segments, matrix);
+  const {
+    segments: validatedSegments,
+    rollingTrafficApplied,
+    totalRouteMinutes,
+    optimizedRouteMinutes,
+    timeDiffMinutes,
+    hasManualOrder,
+  } = await revalidatePlanSegments(draftPlan, segments, matrix);
 
   const suggestedWedThreshold =
     cycle.multiDay
@@ -1338,6 +1433,10 @@ export async function buildRoutePlan(
       segments: validatedSegments,
       suggestedWedThreshold,
       rollingTrafficApplied,
+      totalRouteMinutes,
+      optimizedRouteMinutes,
+      timeDiffMinutes,
+      hasManualOrder,
     },
     matrix,
   };
@@ -1365,7 +1464,14 @@ export async function applySegmentStops(
     serviceMinuteOverrides,
     driverBreakAfterStop,
   };
-  const { segments, rollingTrafficApplied } = await revalidatePlanSegments(
+  const {
+    segments,
+    rollingTrafficApplied,
+    totalRouteMinutes,
+    optimizedRouteMinutes,
+    timeDiffMinutes,
+    hasManualOrder,
+  } = await revalidatePlanSegments(
     nextPlan,
     updatedSegments,
     matrix
@@ -1376,6 +1482,10 @@ export async function applySegmentStops(
     segments,
     rollingTrafficApplied,
     travelTimeSource: matrix.source,
+    totalRouteMinutes,
+    optimizedRouteMinutes,
+    timeDiffMinutes,
+    hasManualOrder,
   };
 }
 
@@ -1407,7 +1517,14 @@ export async function setFirstStopTimeOverride(
   const matrix = resolveMatrix(SCRANTON_DEPOT, plan.allStops, travelMatrix);
   const nextPlan = { ...plan, firstStopTimeOverrides };
 
-  const { segments, rollingTrafficApplied } = await revalidatePlanSegments(
+  const {
+    segments,
+    rollingTrafficApplied,
+    totalRouteMinutes,
+    optimizedRouteMinutes,
+    timeDiffMinutes,
+    hasManualOrder,
+  } = await revalidatePlanSegments(
     nextPlan,
     plan.segments,
     matrix
@@ -1418,6 +1535,10 @@ export async function setFirstStopTimeOverride(
     segments,
     rollingTrafficApplied,
     travelTimeSource: matrix.source,
+    totalRouteMinutes,
+    optimizedRouteMinutes,
+    timeDiffMinutes,
+    hasManualOrder,
   };
 }
 
@@ -1454,7 +1575,14 @@ export async function setDriverBreak(
   const matrix = resolveMatrix(SCRANTON_DEPOT, plan.allStops, travelMatrix);
   const nextPlan = { ...plan, driverBreakAfterStop: nextBreaks };
 
-  const { segments, rollingTrafficApplied } = await revalidatePlanSegments(
+  const {
+    segments,
+    rollingTrafficApplied,
+    totalRouteMinutes,
+    optimizedRouteMinutes,
+    timeDiffMinutes,
+    hasManualOrder,
+  } = await revalidatePlanSegments(
     nextPlan,
     plan.segments,
     matrix
@@ -1465,6 +1593,10 @@ export async function setDriverBreak(
     segments,
     rollingTrafficApplied,
     travelTimeSource: matrix.source,
+    totalRouteMinutes,
+    optimizedRouteMinutes,
+    timeDiffMinutes,
+    hasManualOrder,
   };
 }
 
@@ -1507,7 +1639,14 @@ export async function setServiceMinuteOverride(
   const matrix = resolveMatrix(SCRANTON_DEPOT, plan.allStops, travelMatrix);
   const nextPlan = { ...plan, serviceMinuteOverrides };
 
-  const { segments, rollingTrafficApplied } = await revalidatePlanSegments(
+  const {
+    segments,
+    rollingTrafficApplied,
+    totalRouteMinutes,
+    optimizedRouteMinutes,
+    timeDiffMinutes,
+    hasManualOrder,
+  } = await revalidatePlanSegments(
     nextPlan,
     plan.segments,
     matrix
@@ -1518,6 +1657,10 @@ export async function setServiceMinuteOverride(
     segments,
     rollingTrafficApplied,
     travelTimeSource: matrix.source,
+    totalRouteMinutes,
+    optimizedRouteMinutes,
+    timeDiffMinutes,
+    hasManualOrder,
   };
 }
 
@@ -1553,7 +1696,14 @@ export async function setDriveMinuteOverride(
   const matrix = resolveMatrix(SCRANTON_DEPOT, plan.allStops, travelMatrix);
   const nextPlan = { ...plan, driveMinuteOverrides };
 
-  const { segments, rollingTrafficApplied } = await revalidatePlanSegments(
+  const {
+    segments,
+    rollingTrafficApplied,
+    totalRouteMinutes,
+    optimizedRouteMinutes,
+    timeDiffMinutes,
+    hasManualOrder,
+  } = await revalidatePlanSegments(
     nextPlan,
     plan.segments,
     matrix
@@ -1564,6 +1714,10 @@ export async function setDriveMinuteOverride(
     segments,
     rollingTrafficApplied,
     travelTimeSource: matrix.source,
+    totalRouteMinutes,
+    optimizedRouteMinutes,
+    timeDiffMinutes,
+    hasManualOrder,
   };
 }
 
@@ -1673,6 +1827,45 @@ export async function assignStopToTruck(
   );
 }
 
+export async function assignStopToDay(
+  plan: RoutePlan,
+  stopId: string,
+  targetSegmentIdOrDayIndex: string | number,
+  travelMatrix?: TravelMatrix
+): Promise<RoutePlan> {
+  const fromSegment = plan.segments.find((s) =>
+    s.stops.some((st) => st.stopId === stopId)
+  );
+  if (!fromSegment) {
+    throw new Error("Stop not found on route");
+  }
+
+  let targetSegment: Segment | undefined;
+  if (typeof targetSegmentIdOrDayIndex === "number") {
+    targetSegment = plan.segments[targetSegmentIdOrDayIndex - 1];
+  } else {
+    targetSegment = plan.segments.find((s) => s.id === targetSegmentIdOrDayIndex);
+  }
+
+  if (!targetSegment) {
+    throw new Error("Target day segment not found");
+  }
+
+  if (fromSegment.id === targetSegment.id) {
+    return plan;
+  }
+
+  const matrix = resolveMatrix(SCRANTON_DEPOT, plan.allStops, travelMatrix);
+  return moveStopBetweenSegments(
+    plan,
+    stopId,
+    fromSegment.id,
+    targetSegment.id,
+    targetSegment.stops.length,
+    matrix
+  );
+}
+
 export async function moveStopBetweenSegments(
   plan: RoutePlan,
   stopId: string,
@@ -1713,6 +1906,103 @@ export async function reorderStopInSegment(
     };
   });
   return applySegmentStops(plan, segmentStops, travelMatrix);
+}
+
+/** Reverses the order of stops in the specified segment (or all segments if none specified). */
+export async function flipSegmentStops(
+  plan: RoutePlan,
+  segmentId?: string,
+  travelMatrix?: TravelMatrix
+): Promise<RoutePlan> {
+  const matrix = resolveMatrix(SCRANTON_DEPOT, plan.allStops, travelMatrix);
+  const segmentStops = plan.segments.map((seg) => {
+    if (!segmentId || seg.id === segmentId) {
+      const reversed = [...seg.stops].reverse().map((s, i) => ({ ...s, position: i }));
+      return { segmentId: seg.id, stops: reversed };
+    }
+    return { segmentId: seg.id, stops: [...seg.stops] };
+  });
+
+  // Clear manual drive overrides for flipped segments as preceding stops have inverted
+  let driveMinuteOverrides = plan.driveMinuteOverrides
+    ? { ...plan.driveMinuteOverrides }
+    : undefined;
+  if (driveMinuteOverrides) {
+    if (segmentId) {
+      const nextOverrides = { ...driveMinuteOverrides };
+      delete nextOverrides[segmentId];
+      driveMinuteOverrides =
+        Object.keys(nextOverrides).length > 0 ? nextOverrides : undefined;
+    } else {
+      driveMinuteOverrides = undefined;
+    }
+  }
+
+  const basePlan: RoutePlan = {
+    ...plan,
+    driveMinuteOverrides,
+  };
+
+  return applySegmentStops(basePlan, segmentStops, matrix);
+}
+
+/**
+ * Switches/swaps the routes (all stops) between two segments.
+ * On multi-day runs (or default), swaps Day 1 and Day 2 (or the two specified segments).
+ */
+export async function swapSegmentRoutes(
+  plan: RoutePlan,
+  segmentIdA?: string,
+  segmentIdB?: string,
+  travelMatrix?: TravelMatrix
+): Promise<RoutePlan> {
+  if (plan.segments.length < 2) return plan;
+
+  let segAIndex = 0;
+  let segBIndex = 1;
+
+  if (segmentIdA && segmentIdB) {
+    segAIndex = plan.segments.findIndex((s) => s.id === segmentIdA);
+    segBIndex = plan.segments.findIndex((s) => s.id === segmentIdB);
+    if (segAIndex < 0 || segBIndex < 0 || segAIndex === segBIndex) return plan;
+  } else if (segmentIdA) {
+    segAIndex = plan.segments.findIndex((s) => s.id === segmentIdA);
+    if (segAIndex < 0) return plan;
+    segBIndex = segAIndex === 0 ? 1 : 0;
+  }
+
+  const segA = plan.segments[segAIndex];
+  const segB = plan.segments[segBIndex];
+
+  const stopsForA = segB.stops.map((s, i) => ({ ...s, position: i }));
+  const stopsForB = segA.stops.map((s, i) => ({ ...s, position: i }));
+
+  const segmentStops = plan.segments.map((seg, idx) => {
+    if (idx === segAIndex) return { segmentId: seg.id, stops: stopsForA };
+    if (idx === segBIndex) return { segmentId: seg.id, stops: stopsForB };
+    return { segmentId: seg.id, stops: [...seg.stops] };
+  });
+
+  const matrix = resolveMatrix(SCRANTON_DEPOT, plan.allStops, travelMatrix);
+
+  // Clear manual drive overrides for the swapped segments
+  let driveMinuteOverrides = plan.driveMinuteOverrides
+    ? { ...plan.driveMinuteOverrides }
+    : undefined;
+  if (driveMinuteOverrides) {
+    const nextOverrides = { ...driveMinuteOverrides };
+    delete nextOverrides[segA.id];
+    delete nextOverrides[segB.id];
+    driveMinuteOverrides =
+      Object.keys(nextOverrides).length > 0 ? nextOverrides : undefined;
+  }
+
+  const basePlan: RoutePlan = {
+    ...plan,
+    driveMinuteOverrides,
+  };
+
+  return applySegmentStops(basePlan, segmentStops, matrix);
 }
 
 export async function appendTruckSegment(

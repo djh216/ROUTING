@@ -163,6 +163,14 @@ export interface SegmentValidation {
   warnings: string[];
   errors: string[];
   stopEtas: Record<string, string>;
+  /** Total route minutes if stops are ordered by optimization algorithm */
+  optimizedRouteMinutes?: number;
+  /** Total drive minutes if stops are ordered by optimization algorithm */
+  optimizedDriveMinutes?: number;
+  /** Difference in total route minutes between current manual route and optimized route (>0 means manual is longer) */
+  timeDiffMinutes?: number;
+  /** Whether current stops match the optimal stop order */
+  isOptimizedOrder?: boolean;
 }
 
 export interface Segment {
@@ -204,6 +212,14 @@ export interface RoutePlan {
   driverBreakAfterStop?: Record<string, string>;
   /** User assigns stops to trucks manually. */
   manualTruckAssignment?: boolean;
+  /** Total route minutes across all segments in the current plan */
+  totalRouteMinutes?: number;
+  /** Total route minutes if all segments were in optimized stop order */
+  optimizedRouteMinutes?: number;
+  /** Difference in minutes between total current route and total optimized route */
+  timeDiffMinutes?: number;
+  /** True if any segment order differs from optimized order */
+  hasManualOrder?: boolean;
 }
 
 export interface BatchSummary {

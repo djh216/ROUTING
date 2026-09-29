@@ -54,7 +54,10 @@ interface RouteBoardProps {
   onDriverBreakMove?: (segmentId: string, afterStopId: string) => void;
   onReoptimizeSegment?: (segmentId: string) => void;
   onReoptimizeAllSegments?: () => void;
+  onFlipSegment?: (segmentId?: string) => void;
+  onSwapSegments?: (segmentIdA?: string, segmentIdB?: string) => void;
   onAssignTruck?: (stopId: string, truckNumber: number) => void;
+  onAssignDay?: (stopId: string, targetSegmentId: string) => void;
   onDeliveryInstructionsChange?: (stopId: string, instructions: string) => void;
   onContactChange?: (stopId: string, contactName: string, contactPhone: string) => void;
 }
@@ -421,6 +424,73 @@ function TruckAssignButtons({
   );
 }
 
+export interface DayOption {
+  segmentId: string;
+  name: string;
+  fullName: string;
+}
+
+export function getDayShortName(label: string, index: number): string {
+  const match = label.match(
+    /\b(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday|Mon|Tue|Wed|Thu|Fri|Sat|Sun)\b/i
+  );
+  if (match) {
+    const raw = match[1];
+    return raw.slice(0, 3).charAt(0).toUpperCase() + raw.slice(1, 3).toLowerCase();
+  }
+  const clean = label.replace(/\s*\(.*?\)/, "").trim();
+  if (clean.length > 0 && clean.length <= 5) return clean;
+  return `Day ${index + 1}`;
+}
+
+function DayAssignButtons({
+  availableDays,
+  currentSegmentId,
+  disabled,
+  onAssign,
+}: {
+  availableDays: DayOption[];
+  currentSegmentId: string;
+  disabled?: boolean;
+  onAssign: (targetSegmentId: string) => void;
+}) {
+  return (
+    <div
+      className="stop-card__days"
+      onPointerDown={(e) => e.stopPropagation()}
+    >
+      <span className="stop-card__days-label">Day</span>
+      {availableDays.map((day) => {
+        const isActive = currentSegmentId === day.segmentId;
+        return (
+          <button
+            key={day.segmentId}
+            type="button"
+            className={`stop-card__day-btn ${
+              isActive ? "stop-card__day-btn--active" : ""
+            }`}
+            disabled={disabled}
+            aria-pressed={isActive}
+            title={
+              isActive
+                ? `Currently scheduled on ${day.fullName}`
+                : `Switch this stop to ${day.fullName}`
+            }
+            onClick={(e) => {
+              e.stopPropagation();
+              if (!isActive) {
+                onAssign(day.segmentId);
+              }
+            }}
+          >
+            {day.name}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 function StopCard({
   stop,
   eta,
@@ -432,11 +502,14 @@ function StopCard({
   serviceIsManual,
   hasError,
   currentTruck,
+  currentSegmentId,
+  availableDays,
   onRemove,
   removeDisabled,
   onDriveTimeChange,
   onServiceTimeChange,
   onAssignTruck,
+  onAssignDay,
   onDeliveryInstructionsChange,
   onContactChange,
 }: {
@@ -450,11 +523,14 @@ function StopCard({
   serviceIsManual?: boolean;
   hasError?: boolean;
   currentTruck?: number;
+  currentSegmentId?: string;
+  availableDays?: DayOption[];
   onRemove?: () => void;
   removeDisabled?: boolean;
   onDriveTimeChange?: (minutes: number | null) => void;
   onServiceTimeChange?: (minutes: number | null) => void;
   onAssignTruck?: (truckNumber: number) => void;
+  onAssignDay?: (targetSegmentId: string) => void;
   onDeliveryInstructionsChange?: (stopId: string, instructions: string) => void;
   onContactChange?: (stopId: string, contactName: string, contactPhone: string) => void;
 }) {
@@ -528,6 +604,7 @@ function StopCard({
     onContactChange
   );
   const hasControls = Boolean(
+    (onAssignDay && availableDays && availableDays.length > 1 && currentSegmentId) ||
     (onAssignTruck && currentTruck != null) ||
     driveMinutes != null ||
     onDriveTimeChange ||
@@ -723,6 +800,14 @@ function StopCard({
 
         {hasControls && (
           <div className="stop-card__row stop-card__row--controls">
+            {onAssignDay && availableDays && availableDays.length > 1 && currentSegmentId && (
+              <DayAssignButtons
+                availableDays={availableDays}
+                currentSegmentId={currentSegmentId}
+                disabled={removeDisabled}
+                onAssign={onAssignDay}
+              />
+            )}
             {onAssignTruck && currentTruck != null && (
               <TruckAssignButtons
                 currentTruck={currentTruck}
@@ -777,11 +862,14 @@ function SortableStop({
   serviceIsManual,
   hasError,
   currentTruck,
+  currentSegmentId,
+  availableDays,
   disabled,
   onRemove,
   onDriveTimeChange,
   onServiceTimeChange,
   onAssignTruck,
+  onAssignDay,
   onDeliveryInstructionsChange,
   onContactChange,
 }: {
@@ -795,11 +883,14 @@ function SortableStop({
   serviceIsManual?: boolean;
   hasError?: boolean;
   currentTruck?: number;
+  currentSegmentId?: string;
+  availableDays?: DayOption[];
   disabled?: boolean;
   onRemove?: () => void;
   onDriveTimeChange?: (minutes: number | null) => void;
   onServiceTimeChange?: (minutes: number | null) => void;
   onAssignTruck?: (truckNumber: number) => void;
+  onAssignDay?: (targetSegmentId: string) => void;
   onDeliveryInstructionsChange?: (stopId: string, instructions: string) => void;
   onContactChange?: (stopId: string, contactName: string, contactPhone: string) => void;
 }) {
@@ -827,11 +918,14 @@ function SortableStop({
         serviceIsManual={serviceIsManual}
         hasError={hasError}
         currentTruck={currentTruck}
+        currentSegmentId={currentSegmentId}
+        availableDays={availableDays}
         onRemove={onRemove}
         removeDisabled={disabled}
         onDriveTimeChange={onDriveTimeChange}
         onServiceTimeChange={onServiceTimeChange}
         onAssignTruck={onAssignTruck}
+        onAssignDay={onAssignDay}
         onDeliveryInstructionsChange={onDeliveryInstructionsChange}
         onContactChange={onContactChange}
       />
@@ -866,8 +960,16 @@ function SegmentColumn({
   onDriverBreakMove,
   onReoptimize,
   reoptimizing,
+  onFlip,
+  flipping,
+  onSwapWithOther,
+  swappingWithOther,
+  otherDayName,
+  otherDays,
   truckNumber,
+  availableDays,
   onAssignTruck,
+  onAssignDay,
   onPrintPdf,
   onDeliveryInstructionsChange,
   onContactChange,
@@ -876,6 +978,7 @@ function SegmentColumn({
   segment: Segment;
   stops: Stop[];
   truckNumber: number;
+  availableDays?: DayOption[];
   disabled?: boolean;
   driveOverrides?: Record<string, number>;
   serviceOverrides?: Record<string, number>;
@@ -890,7 +993,14 @@ function SegmentColumn({
   onDriverBreakMove?: (afterStopId: string) => void;
   onReoptimize?: () => void;
   reoptimizing?: boolean;
+  onFlip?: () => void;
+  flipping?: boolean;
+  onSwapWithOther?: (targetSegmentId?: string) => void;
+  swappingWithOther?: boolean;
+  otherDayName?: string;
+  otherDays?: { id: string; name: string }[];
   onAssignTruck?: (stopId: string, truckNumber: number) => void;
+  onAssignDay?: (stopId: string, targetSegmentId: string) => void;
   onPrintPdf?: () => void;
   onDeliveryInstructionsChange?: (stopId: string, instructions: string) => void;
   onContactChange?: (stopId: string, contactName: string, contactPhone: string) => void;
@@ -926,12 +1036,68 @@ function SegmentColumn({
                 Print PDF
               </button>
             )}
+            {onFlip && v.stopCount >= 2 && (
+              <button
+                type="button"
+                className="btn btn--secondary btn--compact"
+                disabled={disabled || flipping}
+                onClick={onFlip}
+                title={
+                  segment.segmentType === "day"
+                    ? "Flip the route (reverse stop order for this day)"
+                    : "Flip the route (reverse stop order for this truck)"
+                }
+              >
+                {flipping ? "Flipping…" : "⇄ Flip route"}
+              </button>
+            )}
+            {otherDays && otherDays.length > 1 ? (
+              <select
+                className="btn btn--secondary btn--compact segment-column__switch-select"
+                disabled={disabled || swappingWithOther}
+                value=""
+                onChange={(e) => {
+                  if (e.target.value && onSwapWithOther) {
+                    onSwapWithOther(e.target.value);
+                  }
+                }}
+                title="Switch this day's route with another day"
+              >
+                <option value="" disabled>
+                  {swappingWithOther ? "Switching…" : "⇄ Switch with…"}
+                </option>
+                {otherDays.map((d) => (
+                  <option key={d.id} value={d.id}>
+                    Switch with {d.name}
+                  </option>
+                ))}
+              </select>
+            ) : onSwapWithOther ? (
+              <button
+                type="button"
+                className="btn btn--secondary btn--compact"
+                disabled={disabled || swappingWithOther}
+                onClick={() => onSwapWithOther()}
+                title={
+                  otherDayName
+                    ? `Switch all stops with ${otherDayName} (swap day schedules)`
+                    : "Switch day's route"
+                }
+              >
+                {swappingWithOther
+                  ? "Switching…"
+                  : otherDayName
+                  ? `⇄ Switch with ${otherDayName}`
+                  : "⇄ Switch days"}
+              </button>
+            ) : null}
             {onReoptimize && v.stopCount >= 2 && (
               <button
                 type="button"
                 className="btn btn--secondary btn--compact"
                 disabled={disabled || reoptimizing}
                 onClick={onReoptimize}
+                title="Restore algorithm-optimized stop order"
               >
                 {reoptimizing ? "Optimizing…" : "Re-optimize"}
               </button>
@@ -1000,6 +1166,65 @@ function SegmentColumn({
             )}
           </div>
         )}
+
+        {v.stopCount >= 2 && (
+          <div
+            className={`segment-column__diff-banner ${
+              v.isOptimizedOrder === false ||
+              (v.timeDiffMinutes != null && v.timeDiffMinutes !== 0)
+                ? "segment-column__diff-banner--manual"
+                : "segment-column__diff-banner--optimal"
+            }`}
+          >
+            <div className="segment-column__diff-content">
+              <span className="segment-column__diff-icon" aria-hidden="true">
+                {v.isOptimizedOrder === false ||
+                (v.timeDiffMinutes != null && v.timeDiffMinutes !== 0)
+                  ? "⚠️"
+                  : "✓"}
+              </span>
+              {v.isOptimizedOrder === false ||
+              (v.timeDiffMinutes != null && v.timeDiffMinutes !== 0) ? (
+                <span className="segment-column__diff-text">
+                  <span className="segment-column__diff-label">Manual route:</span>{" "}
+                  {v.timeDiffMinutes != null && v.timeDiffMinutes > 0 ? (
+                    <strong className="segment-column__diff-val segment-column__diff-val--slower">
+                      +{formatDurationMinutes(v.timeDiffMinutes)} slower
+                    </strong>
+                  ) : v.timeDiffMinutes != null && v.timeDiffMinutes < 0 ? (
+                    <strong className="segment-column__diff-val segment-column__diff-val--faster">
+                      {formatDurationMinutes(Math.abs(v.timeDiffMinutes))} faster
+                    </strong>
+                  ) : (
+                    <strong className="segment-column__diff-val segment-column__diff-val--same">
+                      Same total time
+                    </strong>
+                  )}
+                  {v.optimizedRouteMinutes != null && (
+                    <span className="segment-column__diff-opt-time">
+                      {" "}(optimal: {formatDurationMinutes(v.optimizedRouteMinutes)})
+                    </span>
+                  )}
+                </span>
+              ) : (
+                <span className="segment-column__diff-text">
+                  Optimized order ({formatDurationMinutes(v.optimizedRouteMinutes ?? v.totalRouteMinutes ?? 0)})
+                </span>
+              )}
+            </div>
+            {v.isOptimizedOrder === false && onReoptimize && !disabled && (
+              <button
+                type="button"
+                className="segment-column__diff-revert-btn"
+                onClick={onReoptimize}
+                disabled={reoptimizing}
+                title="Restore algorithm-optimized stop order"
+              >
+                Re-optimize
+              </button>
+            )}
+          </div>
+        )}
       </div>
 
       <SortableContext items={stopIds} strategy={verticalListSortingStrategy}>
@@ -1028,6 +1253,8 @@ function SegmentColumn({
                 serviceIsManual={serviceIsManual}
                 hasError={hasError}
                 currentTruck={truckNumber}
+                currentSegmentId={segment.id}
+                availableDays={availableDays}
                 disabled={disabled}
                 onRemove={onRemoveStop ? () => onRemoveStop(stop.customerId) : undefined}
                 onDriveTimeChange={
@@ -1043,6 +1270,11 @@ function SegmentColumn({
                 onAssignTruck={
                   onAssignTruck
                     ? (targetTruck) => onAssignTruck(stop.id, targetTruck)
+                    : undefined
+                }
+                onAssignDay={
+                  onAssignDay
+                    ? (targetSegmentId) => onAssignDay(stop.id, targetSegmentId)
                     : undefined
                 }
                 onDeliveryInstructionsChange={onDeliveryInstructionsChange}
@@ -1092,13 +1324,19 @@ export default function RouteBoard({
   onDriverBreakMove,
   onReoptimizeSegment,
   onReoptimizeAllSegments,
+  onFlipSegment,
+  onSwapSegments,
   onAssignTruck,
+  onAssignDay,
   onDeliveryInstructionsChange,
   onContactChange,
 }: RouteBoardProps) {
   const [activeId, setActiveId] = useState<string | null>(null);
   const [reoptimizingSegmentId, setReoptimizingSegmentId] = useState<string | null>(null);
   const [reoptimizingAll, setReoptimizingAll] = useState(false);
+  const [flippingSegmentId, setFlippingSegmentId] = useState<string | null>(null);
+  const [flippingAll, setFlippingAll] = useState(false);
+  const [swappingSegments, setSwappingSegments] = useState(false);
   const [printSegment, setPrintSegment] = useState<{ segment: Segment; stops: Stop[] } | null>(null);
   const stopMap = useMemo(() => new Map(plan.allStops.map((s) => [s.id, s])), [plan.allStops]);
 
@@ -1117,6 +1355,41 @@ export default function RouteBoard({
 
   const wedCount = plan.segments[0]?.stops.length ?? 0;
   const isMultiDay = plan.segments.some((s) => s.segmentType === "day");
+
+  const availableDays: DayOption[] = useMemo(() => {
+    if (!isMultiDay || plan.segments.length <= 1) return [];
+    return plan.segments.map((seg, idx) => ({
+      segmentId: seg.id,
+      name: getDayShortName(seg.label, idx),
+      fullName: seg.label,
+    }));
+  }, [isMultiDay, plan.segments]);
+
+  const isLocked = plan.status === "locked";
+
+  const handleAssignDay = async (stopId: string, targetSegmentId: string) => {
+    if (isLocked) return;
+    if (onAssignDay) {
+      onAssignDay(stopId, targetSegmentId);
+      return;
+    }
+    const fromSegment = plan.segments.find((s) => s.stops.some((st) => st.stopId === stopId));
+    if (!fromSegment || fromSegment.id === targetSegmentId) return;
+    const targetSegment = plan.segments.find((s) => s.id === targetSegmentId);
+    if (!targetSegment) return;
+
+    const newSegments = plan.segments.map((seg) => {
+      let stops = seg.stops.filter((s) => s.stopId !== stopId);
+      if (seg.id === targetSegmentId) {
+        stops = [...stops, { stopId, position: stops.length }];
+      }
+      return {
+        segmentId: seg.id,
+        stops: stops.map((s, i) => ({ stopId: s.stopId, position: i })),
+      };
+    });
+    onUpdate(newSegments);
+  };
 
   function handleDragStart(event: DragStartEvent) {
     const id = String(event.active.id);
@@ -1180,10 +1453,60 @@ export default function RouteBoard({
 
   const allErrors = plan.segments.flatMap((s) => s.validation.errors);
 
-  const isLocked = plan.status === "locked";
   const canReoptimize =
     plan.segments.some((s) => s.stops.length >= 2) &&
     !isLocked;
+
+  const totalRouteMinutes =
+    plan.totalRouteMinutes ??
+    plan.segments.reduce((sum, s) => sum + (s.validation.totalRouteMinutes ?? 0), 0);
+  const optimizedRouteMinutes =
+    plan.optimizedRouteMinutes ??
+    plan.segments.reduce(
+      (sum, s) =>
+        sum +
+        (s.validation.optimizedRouteMinutes ?? s.validation.totalRouteMinutes ?? 0),
+      0
+    );
+  const timeDiffMinutes =
+    plan.timeDiffMinutes ?? (totalRouteMinutes - optimizedRouteMinutes);
+  const hasManualOrder =
+    plan.hasManualOrder ??
+    plan.segments.some(
+      (s) =>
+        s.validation.isOptimizedOrder === false ||
+        (s.validation.timeDiffMinutes ?? 0) !== 0
+    );
+
+  const canFlip =
+    !isLocked &&
+    onFlipSegment != null &&
+    plan.segments.some((s) => s.stops.length >= 2);
+
+  async function handleFlipSegment(segmentId?: string) {
+    if (!onFlipSegment) return;
+    if (segmentId) {
+      setFlippingSegmentId(segmentId);
+    } else {
+      setFlippingAll(true);
+    }
+    try {
+      await onFlipSegment(segmentId);
+    } finally {
+      setFlippingSegmentId(null);
+      setFlippingAll(false);
+    }
+  }
+
+  async function handleSwapDays(segmentIdA?: string, segmentIdB?: string) {
+    if (!onSwapSegments) return;
+    setSwappingSegments(true);
+    try {
+      await onSwapSegments(segmentIdA, segmentIdB);
+    } finally {
+      setSwappingSegments(false);
+    }
+  }
 
   async function handleReoptimizeSegment(segmentId: string) {
     if (!onReoptimizeSegment) return;
@@ -1224,6 +1547,25 @@ export default function RouteBoard({
             </span>
           </label>
         )}
+        {isMultiDay && onSwapSegments && !isLocked && plan.segments.length >= 2 && (
+          <button
+            type="button"
+            className="btn btn--secondary"
+            disabled={swappingSegments}
+            onClick={() => void handleSwapDays()}
+            title={
+              plan.segments.length === 2
+                ? `Switch ${plan.segments[0]?.label.split(" ")[0]} and ${plan.segments[1]?.label.split(" ")[0]} routes`
+                : "Switch days' routes"
+            }
+          >
+            {swappingSegments
+              ? "Switching days…"
+              : plan.segments.length === 2
+              ? `⇄ Switch days (${plan.segments[0]?.label.split(" ")[0] ?? "Day 1"} ↔ ${plan.segments[1]?.label.split(" ")[0] ?? "Day 2"})`
+              : "⇄ Switch days"}
+          </button>
+        )}
         {!isMultiDay && onAddTruck && !isLocked && (
           <button type="button" className="btn btn--secondary" onClick={onAddTruck}>
             + Add truck
@@ -1233,6 +1575,28 @@ export default function RouteBoard({
           <span className="route-board__assign-hint">
             Drag stops between trucks to split the route
           </span>
+        )}
+        {canFlip && plan.segments.length > 1 && (
+          <button
+            type="button"
+            className="btn btn--secondary"
+            disabled={isLocked || flippingAll || flippingSegmentId != null}
+            onClick={() => void handleFlipSegment()}
+            title="Flip the route order on all trucks"
+          >
+            {flippingAll ? "Flipping all…" : "⇄ Flip all trucks"}
+          </button>
+        )}
+        {canFlip && plan.segments.length === 1 && (
+          <button
+            type="button"
+            className="btn btn--secondary"
+            disabled={isLocked || flippingAll || flippingSegmentId != null}
+            onClick={() => void handleFlipSegment(plan.segments[0].id)}
+            title="Flip the route (reverse stop order)"
+          >
+            {flippingSegmentId === plan.segments[0].id ? "Flipping…" : "⇄ Flip route"}
+          </button>
         )}
         {canReoptimize && onReoptimizeAllSegments && (
           <button
@@ -1263,6 +1627,52 @@ export default function RouteBoard({
         )}
       </div>
 
+      {hasManualOrder && (
+        <div className="route-board__comparison-banner">
+          <div className="route-board__comparison-left">
+            <span className="route-board__comparison-badge">Manual Route Active</span>
+            <div className="route-board__comparison-details">
+              <span>
+                Current route: <strong>{formatDurationMinutes(totalRouteMinutes)}</strong>
+              </span>
+              <span className="route-board__comparison-sep">·</span>
+              <span>
+                Optimized route: <strong>{formatDurationMinutes(optimizedRouteMinutes)}</strong>
+              </span>
+              <span className="route-board__comparison-sep">·</span>
+              <span
+                className={`route-board__comparison-diff ${
+                  timeDiffMinutes > 0
+                    ? "diff-slower"
+                    : timeDiffMinutes < 0
+                    ? "diff-faster"
+                    : "diff-same"
+                }`}
+              >
+                {timeDiffMinutes > 0
+                  ? `+${formatDurationMinutes(timeDiffMinutes)} (+${timeDiffMinutes} min slower than optimized)`
+                  : timeDiffMinutes < 0
+                  ? `-${formatDurationMinutes(Math.abs(timeDiffMinutes))} (${Math.abs(timeDiffMinutes)} min faster than optimized)`
+                  : "Same total duration as optimized route"}
+              </span>
+            </div>
+          </div>
+          <div className="route-board__comparison-actions">
+            {canReoptimize && onReoptimizeAllSegments && (
+              <button
+                type="button"
+                className="btn btn--primary btn--compact"
+                disabled={reoptimizingAll || isLocked}
+                onClick={() => void handleReoptimizeAll()}
+                title="Reset all stops to algorithm-optimized sequence"
+              >
+                {reoptimizingAll ? "Re-optimizing…" : "Re-optimize to best time"}
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
       {allErrors.length > 0 && (
         <div className="route-board__banner route-board__banner--error">
           {allErrors.length} validation issue(s) — adjust stop order or split across segments
@@ -1281,62 +1691,106 @@ export default function RouteBoard({
           className="route-board__columns"
           style={{ gridTemplateColumns: `repeat(${columnCount}, 1fr)` }}
         >
-          {segmentStops.map(({ segment, stops }, segmentIndex) => (
-            <SegmentColumn
-              key={segment.id}
-              segment={segment}
-              stops={stops}
-              truckNumber={segmentIndex + 1}
-              disabled={plan.status === "locked"}
-              driveOverrides={plan.driveMinuteOverrides?.[segment.id]}
-              serviceOverrides={plan.serviceMinuteOverrides?.[segment.id]}
-              driverBreakEnabled={plan.driverBreakAfterStop?.[segment.id] != null}
-              firstStopTimeOverride={plan.firstStopTimeOverrides?.[segment.id]}
-              defaultFirstStopTime="10:00"
-              onRemoveStop={!isLocked ? onRemoveStop : undefined}
-              onDriveTimeChange={
-                !isLocked && onDriveTimeChange
-                  ? (stopId, minutes) => onDriveTimeChange(segment.id, stopId, minutes)
-                  : undefined
-              }
-              onServiceTimeChange={
-                !isLocked && onServiceTimeChange
-                  ? (stopId, minutes) => onServiceTimeChange(segment.id, stopId, minutes)
-                  : undefined
-              }
-              onFirstStopTimeChange={
-                !isLocked && onFirstStopTimeChange
-                  ? (time) => onFirstStopTimeChange(segment.id, time)
-                  : undefined
-              }
-              onDriverBreakChange={
-                !isLocked && onDriverBreakChange
-                  ? (enabled) => onDriverBreakChange(segment.id, enabled)
-                  : undefined
-              }
-              onDriverBreakMove={
-                !isLocked && onDriverBreakMove
-                  ? (afterStopId) => onDriverBreakMove(segment.id, afterStopId)
-                  : undefined
-              }
-              onReoptimize={
-                onReoptimizeSegment
-                  ? () => void handleReoptimizeSegment(segment.id)
-                  : undefined
-              }
-              reoptimizing={
-                reoptimizingSegmentId === segment.id || reoptimizingAll
-              }
-              onAssignTruck={onAssignTruck}
-              onPrintPdf={() => setPrintSegment({ segment, stops })}
-              onDeliveryInstructionsChange={onDeliveryInstructionsChange}
-              onContactChange={onContactChange}
-            />
-          ))}
+          {segmentStops.map(({ segment, stops }, segmentIndex) => {
+            const otherSegment =
+              isMultiDay && plan.segments.length === 2
+                ? plan.segments.find((s) => s.id !== segment.id)
+                : undefined;
+            const otherDayName = otherSegment
+              ? otherSegment.label.replace(/\s*\(.*?\)/, "").trim()
+              : undefined;
+            const otherDays =
+              isMultiDay && plan.segments.length > 2
+                ? plan.segments
+                    .filter((s) => s.id !== segment.id)
+                    .map((s) => ({
+                      id: s.id,
+                      name: s.label.replace(/\s*\(.*?\)/, "").trim(),
+                    }))
+                : undefined;
+
+            return (
+              <SegmentColumn
+                key={segment.id}
+                segment={segment}
+                stops={stops}
+                truckNumber={segmentIndex + 1}
+                disabled={plan.status === "locked"}
+                driveOverrides={plan.driveMinuteOverrides?.[segment.id]}
+                serviceOverrides={plan.serviceMinuteOverrides?.[segment.id]}
+                driverBreakEnabled={plan.driverBreakAfterStop?.[segment.id] != null}
+                firstStopTimeOverride={plan.firstStopTimeOverrides?.[segment.id]}
+                defaultFirstStopTime="10:00"
+                onRemoveStop={!isLocked ? onRemoveStop : undefined}
+                onDriveTimeChange={
+                  !isLocked && onDriveTimeChange
+                    ? (stopId, minutes) => onDriveTimeChange(segment.id, stopId, minutes)
+                    : undefined
+                }
+                onServiceTimeChange={
+                  !isLocked && onServiceTimeChange
+                    ? (stopId, minutes) => onServiceTimeChange(segment.id, stopId, minutes)
+                    : undefined
+                }
+                onFirstStopTimeChange={
+                  !isLocked && onFirstStopTimeChange
+                    ? (time) => onFirstStopTimeChange(segment.id, time)
+                    : undefined
+                }
+                onDriverBreakChange={
+                  !isLocked && onDriverBreakChange
+                    ? (enabled) => onDriverBreakChange(segment.id, enabled)
+                    : undefined
+                }
+                onDriverBreakMove={
+                  !isLocked && onDriverBreakMove
+                    ? (afterStopId) => onDriverBreakMove(segment.id, afterStopId)
+                    : undefined
+                }
+                onReoptimize={
+                  onReoptimizeSegment
+                    ? () => void handleReoptimizeSegment(segment.id)
+                    : undefined
+                }
+                reoptimizing={
+                  reoptimizingSegmentId === segment.id || reoptimizingAll
+                }
+                onFlip={
+                  onFlipSegment && segment.stops.length >= 2
+                    ? () => void handleFlipSegment(segment.id)
+                    : undefined
+                }
+                flipping={
+                  flippingSegmentId === segment.id || flippingAll
+                }
+                onSwapWithOther={
+                  isMultiDay && onSwapSegments && !isLocked && plan.segments.length >= 2
+                    ? (targetId) =>
+                        void handleSwapDays(segment.id, targetId ?? otherSegment?.id)
+                    : undefined
+                }
+                swappingWithOther={swappingSegments}
+                otherDayName={otherDayName}
+                otherDays={otherDays}
+                availableDays={availableDays}
+                onAssignTruck={segment.segmentType === "day" ? undefined : onAssignTruck}
+                onAssignDay={!isLocked && availableDays.length > 1 ? handleAssignDay : undefined}
+                onPrintPdf={() => setPrintSegment({ segment, stops })}
+                onDeliveryInstructionsChange={onDeliveryInstructionsChange}
+                onContactChange={onContactChange}
+              />
+            );
+          })}
         </div>
 
         <DragOverlay>
-          {activeStop ? <StopCard stop={activeStop} /> : null}
+          {activeStop ? (
+            <StopCard
+              stop={activeStop}
+              availableDays={availableDays}
+              currentSegmentId={findSegmentForStop(plan, activeStop.id) ?? undefined}
+            />
+          ) : null}
           {activeBreakSegmentId ? (
             <div className="segment-column__break-marker segment-column__break-marker--overlay">
               <span className="segment-column__break-grip">⋮⋮</span>

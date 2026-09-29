@@ -3,8 +3,10 @@ import { seedCustomerStoreForTests } from "../data/customer-store.js";
 import { TERRITORY_CYCLES } from "../data/territories.js";
 import {
   applySegmentStops,
+  assignStopToDay,
   assignStopToTruck,
   buildRoutePlan,
+  flipSegmentStops,
   isOrderEligible,
   nearestNeighborOrder,
   optimizeStopOrder,
@@ -12,6 +14,7 @@ import {
   setDriveMinuteOverride,
   setFirstStopTimeOverride,
   setWedThreshold,
+  swapSegmentRoutes,
 } from "./planner.js";
 import { SCRANTON_DEPOT } from "../../shared/constants.js";
 import { AM_PM_TIME_PATTERN } from "../../shared/timeFormat.js";
@@ -226,3 +229,150 @@ if (firstEta) {
     "First stop time override should set arrival ETA"
   );
 }
+
+// Test flipping route and comparing time difference between manual and optimized route
+const originalStops = thursdaySepaPlan.segments[0].stops;
+const originalFirstId = originalStops[0].stopId;
+const originalLastId = originalStops[originalStops.length - 1].stopId;
+const sepaMatrix = createEstimatedTravelMatrix(SCRANTON_DEPOT, thursdaySepaPlan.allStops);
+
+const flippedSepa = await flipSegmentStops(thursdaySepaPlan, segId, sepaMatrix);
+assert(
+  flippedSepa.segments[0].stops[0].stopId === originalLastId,
+  "Flipped route first stop should match original last stop"
+);
+assert(
+  flippedSepa.segments[0].stops[flippedSepa.segments[0].stops.length - 1].stopId === originalFirstId,
+  "Flipped route last stop should match original first stop"
+);
+assert(
+  flippedSepa.hasManualOrder === true,
+  "Flipped route should be flagged as having manual order"
+);
+assert(
+  typeof flippedSepa.segments[0].validation.timeDiffMinutes === "number",
+  "Segment should calculate time difference in minutes vs optimized"
+);
+assert(
+  typeof flippedSepa.timeDiffMinutes === "number",
+  "Plan should calculate overall time difference in minutes vs optimized"
+);
+
+// Re-optimize should restore the optimal route
+const restoredSepa = await reoptimizeSegments(flippedSepa, [segId], sepaMatrix);
+assert(
+  restoredSepa.segments[0].validation.isOptimizedOrder === true,
+  "Re-optimized route should have isOptimizedOrder = true"
+);
+assert(
+  restoredSepa.segments[0].validation.timeDiffMinutes === 0,
+  "Re-optimized route should have timeDiffMinutes = 0"
+);
+assert(
+  restoredSepa.hasManualOrder === false,
+  "Re-optimized plan should have hasManualOrder = false"
+);
+console.log("All route flip and time difference tests passed.");
+
+// Multi-day route switching tests (Pittsburgh Wed ↔ Thu)
+const { plan: pittsburghPlan, matrix: pittsburghRunMatrix } = await buildRoutePlan("pittsburgh", ORDERS, REF);
+assert(pittsburghPlan.segments.length === 2, "Pittsburgh should have 2 segments (Wednesday & Thursday)");
+const wedSegId = pittsburghPlan.segments[0].id;
+const thuSegId = pittsburghPlan.segments[1].id;
+const origWedStops = pittsburghPlan.segments[0].stops.map((s) => s.stopId);
+const origThuStops = pittsburghPlan.segments[1].stops.map((s) => s.stopId);
+
+const swappedPittsburgh = await swapSegmentRoutes(
+  pittsburghPlan,
+  wedSegId,
+  thuSegId,
+  pittsburghRunMatrix
+);
+assert(
+  swappedPittsburgh.segments[0].stops.map((s) => s.stopId).join(",") === origThuStops.join(","),
+  "Wednesday should now contain Thursday's stops"
+);
+assert(
+  swappedPittsburgh.segments[1].stops.map((s) => s.stopId).join(",") === origWedStops.join(","),
+  "Thursday should now contain Wednesday's stops"
+);
+assert(
+  typeof swappedPittsburgh.segments[0].validation.timeDiffMinutes === "number",
+  "Swapped day segment should calculate timeDiffMinutes"
+);
+assert(
+  typeof swappedPittsburgh.timeDiffMinutes === "number",
+  "Swapped multi-day plan should calculate overall timeDiffMinutes"
+);
+
+// Swapping again should return back to original assignment
+const revertedPittsburgh = await swapSegmentRoutes(
+  swappedPittsburgh,
+  wedSegId,
+  thuSegId,
+  pittsburghRunMatrix
+);
+assert(
+  revertedPittsburgh.segments[0].stops.map((s) => s.stopId).join(",") === origWedStops.join(","),
+  "Re-swapping should restore original Wednesday stops"
+);
+assert(
+  revertedPittsburgh.segments[1].stops.map((s) => s.stopId).join(",") === origThuStops.join(","),
+  "Re-swapping should restore original Thursday stops"
+);
+console.log("All multi-day route switching tests passed.");
+
+// Multi-day account stop day selection tests (switch which day a stop is on)
+const stopToMove = pittsburghPlan.segments[0].stops[0].stopId;
+const wedStopsBefore = pittsburghPlan.segments[0].stops.length;
+const thuStopsBefore = pittsburghPlan.segments[1].stops.length;
+
+const movedToThu = await assignStopToDay(
+  pittsburghPlan,
+  stopToMove,
+  thuSegId,
+  pittsburghRunMatrix
+);
+
+assert(
+  movedToThu.segments[0].stops.length === wedStopsBefore - 1,
+  "Wednesday should have one fewer stop after reassignment"
+);
+assert(
+  movedToThu.segments[1].stops.length === thuStopsBefore + 1,
+  "Thursday should have one more stop after reassignment"
+);
+assert(
+  !movedToThu.segments[0].stops.some((s) => s.stopId === stopToMove),
+  "Moved stop should no longer be on Wednesday"
+);
+assert(
+  movedToThu.segments[1].stops.some((s) => s.stopId === stopToMove),
+  "Moved stop should now be on Thursday"
+);
+assert(
+  movedToThu.segments[1].stops[movedToThu.segments[1].stops.length - 1].stopId === stopToMove,
+  "Moved stop should be appended to the target day"
+);
+
+// Moving the stop back to Wednesday
+const movedBackToWed = await assignStopToDay(
+  movedToThu,
+  stopToMove,
+  wedSegId,
+  pittsburghRunMatrix
+);
+assert(
+  movedBackToWed.segments[0].stops.length === wedStopsBefore,
+  "Wednesday stop count should be restored"
+);
+assert(
+  movedBackToWed.segments[1].stops.length === thuStopsBefore,
+  "Thursday stop count should be restored"
+);
+assert(
+  movedBackToWed.segments[0].stops.some((s) => s.stopId === stopToMove),
+  "Stop should be back on Wednesday"
+);
+console.log("All multi-day stop day selection tests passed.");
+

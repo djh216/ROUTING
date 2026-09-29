@@ -148,6 +148,39 @@ export async function reoptimizeSegments(
   return res.json();
 }
 
+export async function flipRouteSegment(
+  cycleId: string,
+  segmentId?: string
+): Promise<RoutePlan> {
+  const res = await fetch(`${API}/routes/${encodeURIComponent(cycleId)}/flip`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(segmentId ? { segmentId } : {}),
+  });
+  if (!res.ok) {
+    const data = (await res.json().catch(() => ({}))) as { error?: string };
+    throw new Error(data.error ?? "Failed to flip route");
+  }
+  return res.json();
+}
+
+export async function swapSegmentRoutes(
+  cycleId: string,
+  segmentIdA?: string,
+  segmentIdB?: string
+): Promise<RoutePlan> {
+  const res = await fetch(`${API}/routes/${encodeURIComponent(cycleId)}/swap-segments`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ segmentIdA, segmentIdB }),
+  });
+  if (!res.ok) {
+    const data = (await res.json().catch(() => ({}))) as { error?: string };
+    throw new Error(data.error ?? "Failed to switch routes");
+  }
+  return res.json();
+}
+
 export async function updateSegments(
   cycleId: string,
   segments: { segmentId: string; stops: { stopId: string; position: number }[] }[]
@@ -239,6 +272,23 @@ export async function setWedThreshold(cycleId: string, threshold: number): Promi
     body: JSON.stringify({ threshold }),
   });
   if (!res.ok) throw new Error("Failed to set threshold");
+  return res.json();
+}
+
+export async function assignStopToDay(
+  cycleId: string,
+  stopId: string,
+  targetSegmentId: string
+): Promise<RoutePlan> {
+  const res = await fetch(`${API}/routes/${encodeURIComponent(cycleId)}/assign-day`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ stopId, targetSegmentId }),
+  });
+  if (!res.ok) {
+    const data = (await res.json().catch(() => ({}))) as { error?: string };
+    throw new Error(data.error ?? "Failed to switch day for stop");
+  }
   return res.json();
 }
 

@@ -7,6 +7,7 @@ import RouteTabs from "./components/RouteTabs";
 import RouteView from "./components/RouteView";
 import {
   addTruck,
+  assignStopToDay,
   assignStopToTruck,
   fetchBatches,
   fetchRoutePlan,
@@ -21,12 +22,14 @@ import {
   setStopServiceTime,
   setWedThreshold,
   reoptimizeSegments,
+  flipRouteSegment,
+  swapSegmentRoutes,
   updateSegments,
   updateStopDeliveryInstructions,
   updateStopContact,
 } from "./lib/api";
 import { applySegmentUpdates, type SegmentUpdate } from "./lib/segmentDrag";
-import { formatDateTime } from "@shared/timeFormat";
+import { formatDateTime, formatDurationMinutes } from "@shared/timeFormat";
 import type { BatchSummary, RoutePlan } from "@shared/types";
 
 export default function App() {
@@ -84,13 +87,14 @@ export default function App() {
       try {
         const updated = await updateSegments(selectedCycleId, segments);
         setPlan(updated);
+        refreshMapGeometry();
       } catch (e) {
         setError(e instanceof Error ? e.message : "Failed to update route");
         const restored = await fetchRoutePlan(selectedCycleId);
         setPlan(restored);
       }
     },
-    [selectedCycleId]
+    [selectedCycleId, refreshMapGeometry]
   );
 
   const handleWedThreshold = useCallback(
@@ -135,6 +139,36 @@ export default function App() {
     }
   }, [selectedCycleId, refreshMapGeometry]);
 
+  const handleFlipSegment = useCallback(
+    async (segmentId?: string) => {
+      if (!selectedCycleId) return;
+      try {
+        const updated = await flipRouteSegment(selectedCycleId, segmentId);
+        setPlan(updated);
+        setPreviewSegments(null);
+        refreshMapGeometry();
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "Failed to flip route");
+      }
+    },
+    [selectedCycleId, refreshMapGeometry]
+  );
+
+  const handleSwapSegments = useCallback(
+    async (segmentIdA?: string, segmentIdB?: string) => {
+      if (!selectedCycleId) return;
+      try {
+        const updated = await swapSegmentRoutes(selectedCycleId, segmentIdA, segmentIdB);
+        setPlan(updated);
+        setPreviewSegments(null);
+        refreshMapGeometry();
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "Failed to switch days' routes");
+      }
+    },
+    [selectedCycleId, refreshMapGeometry]
+  );
+
   const handleAssignTruck = useCallback(
     async (stopId: string, truckNumber: number) => {
       if (!selectedCycleId) return;
@@ -147,6 +181,21 @@ export default function App() {
       }
     },
     [selectedCycleId]
+  );
+
+  const handleAssignDay = useCallback(
+    async (stopId: string, targetSegmentId: string) => {
+      if (!selectedCycleId) return;
+      try {
+        const updated = await assignStopToDay(selectedCycleId, stopId, targetSegmentId);
+        setPlan(updated);
+        setPreviewSegments(null);
+        refreshMapGeometry();
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "Failed to switch day for stop");
+      }
+    },
+    [selectedCycleId, refreshMapGeometry]
   );
 
   const handleDriveTimeChange = useCallback(
@@ -415,6 +464,18 @@ export default function App() {
                       : "estimated"}
                   </>
                 )}
+                {plan.hasManualOrder && (
+                  <span className="main__manual-badge">
+                    {" "}
+                    · Manual route order (
+                    {(plan.timeDiffMinutes ?? 0) > 0
+                      ? `+${formatDurationMinutes(plan.timeDiffMinutes!)} slower than optimal`
+                      : (plan.timeDiffMinutes ?? 0) < 0
+                      ? `${formatDurationMinutes(Math.abs(plan.timeDiffMinutes!))} faster than optimal`
+                      : "same time as optimal"}
+                    )
+                  </span>
+                )}
               </p>
             </div>
             <RouteView
@@ -471,8 +532,17 @@ export default function App() {
               onReoptimizeAllSegments={
                 plan.status !== "locked" ? handleReoptimizeAllSegments : undefined
               }
+              onFlipSegment={
+                plan.status !== "locked" ? handleFlipSegment : undefined
+              }
+              onSwapSegments={
+                plan.status !== "locked" ? handleSwapSegments : undefined
+              }
               onAssignTruck={
                 plan.status !== "locked" ? handleAssignTruck : undefined
+              }
+              onAssignDay={
+                plan.status !== "locked" ? handleAssignDay : undefined
               }
               onDeliveryInstructionsChange={(stopId, instructions) =>
                 void handleDeliveryInstructionsChange(stopId, instructions)

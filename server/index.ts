@@ -25,8 +25,10 @@ import { uniqueTerritories } from "./data/territories.js";
 import {
   applySegmentStops,
   appendTruckSegment,
+  assignStopToDay,
   assignStopToTruck,
   buildRoutePlan,
+  flipSegmentStops,
   reorderStopInSegment,
   reoptimizeSegments,
   setDriveMinuteOverride,
@@ -34,6 +36,7 @@ import {
   setFirstStopTimeOverride,
   setServiceMinuteOverride,
   setWedThreshold,
+  swapSegmentRoutes,
 } from "./routing/planner.js";
 import { buildRouteGeometry, clearRouteGeometryCache } from "./routing/route-geometry.js";
 import {
@@ -510,6 +513,91 @@ app.post("/api/routes/:cycleId/reoptimize", async (req, res) => {
   } catch (e) {
     res.status(500).json({
       error: e instanceof Error ? e.message : "Failed to re-optimize route",
+    });
+  }
+});
+
+app.post("/api/routes/:cycleId/flip", async (req, res) => {
+  try {
+    const plan = await getOrCreatePlan(req.params.cycleId);
+    if (plan.status === "locked") {
+      res.status(400).json({ error: "Route is locked" });
+      return;
+    }
+    const matrix = getMatrixForCycle(req.params.cycleId, plan);
+    const { segmentId } = req.body as { segmentId?: string };
+    const updated = await flipSegmentStops(plan, segmentId, matrix);
+    routePlans.set(req.params.cycleId, updated);
+    res.json(updated);
+  } catch (e) {
+    res.status(500).json({
+      error: e instanceof Error ? e.message : "Failed to flip route",
+    });
+  }
+});
+
+app.post("/api/routes/:cycleId/swap-segments", async (req, res) => {
+  try {
+    const plan = await getOrCreatePlan(req.params.cycleId);
+    if (plan.status === "locked") {
+      res.status(400).json({ error: "Route is locked" });
+      return;
+    }
+    const matrix = getMatrixForCycle(req.params.cycleId, plan);
+    const { segmentIdA, segmentIdB } = req.body as {
+      segmentIdA?: string;
+      segmentIdB?: string;
+    };
+    const updated = await swapSegmentRoutes(plan, segmentIdA, segmentIdB, matrix);
+    routePlans.set(req.params.cycleId, updated);
+    res.json(updated);
+  } catch (e) {
+    res.status(500).json({
+      error: e instanceof Error ? e.message : "Failed to switch routes",
+    });
+  }
+});
+
+app.post("/api/routes/:cycleId/switch-days", async (req, res) => {
+  try {
+    const plan = await getOrCreatePlan(req.params.cycleId);
+    if (plan.status === "locked") {
+      res.status(400).json({ error: "Route is locked" });
+      return;
+    }
+    const matrix = getMatrixForCycle(req.params.cycleId, plan);
+    const { segmentIdA, segmentIdB } = req.body as {
+      segmentIdA?: string;
+      segmentIdB?: string;
+    };
+    const updated = await swapSegmentRoutes(plan, segmentIdA, segmentIdB, matrix);
+    routePlans.set(req.params.cycleId, updated);
+    res.json(updated);
+  } catch (e) {
+    res.status(500).json({
+      error: e instanceof Error ? e.message : "Failed to switch days",
+    });
+  }
+});
+
+app.post("/api/routes/:cycleId/assign-day", async (req, res) => {
+  try {
+    const plan = await getOrCreatePlan(req.params.cycleId);
+    if (plan.status === "locked") {
+      res.status(400).json({ error: "Route is locked" });
+      return;
+    }
+    const matrix = getMatrixForCycle(req.params.cycleId, plan);
+    const { stopId, targetSegmentId } = req.body as {
+      stopId: string;
+      targetSegmentId: string;
+    };
+    const updated = await assignStopToDay(plan, stopId, targetSegmentId, matrix);
+    routePlans.set(req.params.cycleId, updated);
+    res.json(updated);
+  } catch (e) {
+    res.status(500).json({
+      error: e instanceof Error ? e.message : "Failed to switch day for stop",
     });
   }
 });

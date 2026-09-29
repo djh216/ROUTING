@@ -32,7 +32,10 @@ interface RouteViewProps {
   onDriverBreakMove?: (segmentId: string, afterStopId: string) => void;
   onReoptimizeSegment?: (segmentId: string) => void;
   onReoptimizeAllSegments?: () => void;
+  onFlipSegment?: (segmentId?: string) => void;
+  onSwapSegments?: (segmentIdA?: string, segmentIdB?: string) => void;
   onAssignTruck?: (stopId: string, truckNumber: number) => void;
+  onAssignDay?: (stopId: string, targetSegmentId: string) => void;
   onDeliveryInstructionsChange?: (stopId: string, instructions: string) => void;
   onContactChange?: (stopId: string, contactName: string, contactPhone: string) => void;
   mapGeometryRefreshKey: number;
@@ -58,7 +61,10 @@ export default function RouteView({
   onDriverBreakMove,
   onReoptimizeSegment,
   onReoptimizeAllSegments,
+  onFlipSegment,
+  onSwapSegments,
   onAssignTruck,
+  onAssignDay,
   onDeliveryInstructionsChange,
   onContactChange,
   mapGeometryRefreshKey,
@@ -100,7 +106,10 @@ export default function RouteView({
         onDriverBreakMove={onDriverBreakMove}
         onReoptimizeSegment={onReoptimizeSegment}
         onReoptimizeAllSegments={onReoptimizeAllSegments}
+        onFlipSegment={onFlipSegment}
+        onSwapSegments={onSwapSegments}
         onAssignTruck={onAssignTruck}
+        onAssignDay={onAssignDay}
         onDeliveryInstructionsChange={onDeliveryInstructionsChange}
         onContactChange={onContactChange}
       />
