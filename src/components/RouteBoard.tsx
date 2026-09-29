@@ -16,6 +16,7 @@ import { CSS } from "@dnd-kit/utilities";
 import { Fragment, useEffect, useMemo, useState, type KeyboardEvent, type Key } from "react";
 import type { RoutePlan, Segment, SegmentValidation, Stop } from "@shared/types";
 import { DRIVER_BREAK_MINUTES, NEW_DAY_SEGMENT_ID, PITTSBURGH_MAX_DAYS, SERVICE_MINUTES_PER_STOP } from "@shared/constants";
+import { defaultFirstStopTimeForName } from "@shared/routeDefaults";
 import {
   formatDurationMinutes,
   formatTimeOfDay,
@@ -1735,7 +1736,7 @@ export default function RouteBoard({
                 serviceOverrides={plan.serviceMinuteOverrides?.[segment.id]}
                 driverBreakEnabled={plan.driverBreakAfterStop?.[segment.id] != null}
                 firstStopTimeOverride={plan.firstStopTimeOverrides?.[segment.id]}
-                defaultFirstStopTime="10:00"
+                defaultFirstStopTime={defaultFirstStopTimeForName(stops[0]?.customerName)}
                 onRemoveStop={!isLocked ? onRemoveStop : undefined}
                 onDriveTimeChange={
                   !isLocked && onDriveTimeChange

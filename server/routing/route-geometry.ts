@@ -228,16 +228,20 @@ async function buildSegmentDetails(
     let baseMinutes = 0;
     let driveMinutes = 0;
 
-    if (toStopId && segment?.validation.stopTrafficMinutes?.[toStopId] != null) {
-      trafficMinutes = Math.max(0, Math.round(segment.validation.stopTrafficMinutes[toStopId]));
-      baseMinutes = Math.round(
-        segment.validation.stopBaseDriveMinutes?.[toStopId] ??
-          segment.validation.stopDriveMinutes?.[toStopId] ??
-          0
-      );
-      driveMinutes = Math.round(
-        segment.validation.stopDriveMinutes?.[toStopId] ?? (baseMinutes + trafficMinutes)
-      );
+    const scheduledDrive = toStopId
+      ? segment?.validation.stopDriveMinutes?.[toStopId]
+      : segment?.validation.returnDriveMinutes;
+
+    if (scheduledDrive != null) {
+      driveMinutes = Math.round(scheduledDrive);
+      trafficMinutes =
+        toStopId && segment?.validation.stopTrafficMinutes?.[toStopId] != null
+          ? Math.max(0, Math.round(segment.validation.stopTrafficMinutes[toStopId]))
+          : 0;
+      baseMinutes =
+        toStopId && segment?.validation.stopBaseDriveMinutes?.[toStopId] != null
+          ? Math.round(segment.validation.stopBaseDriveMinutes[toStopId])
+          : driveMinutes;
     } else if (isGoogleAvailable && apiKey) {
       const liveDuration = await fetchGoogleLegDuration(fromCoords, toCoords, departureTime, apiKey);
       if (liveDuration) {

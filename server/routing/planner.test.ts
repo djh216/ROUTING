@@ -506,3 +506,106 @@ assert(
 );
 console.log("All Pittsburgh third-day tests passed.");
 
+const vetriCustomer = {
+  id: "vetri",
+  name: "Vetri",
+  address: "1312 Spruce St",
+  city: "Philadelphia",
+  territoryId: "philadelphia",
+  lat: 39.9,
+  lng: -75.17,
+  contactName: "Bobby",
+  contactPhone: "215-555-0199",
+  deliveryInstructions: "",
+};
+const pizzeriaVetri = {
+  id: "pizzeria-vetri",
+  name: "Pizzeria Vetri - Art Museum",
+  address: "1939 Callowhill Street",
+  city: "Philadelphia",
+  territoryId: "philadelphia",
+  lat: 39.96,
+  lng: -75.17,
+  contactName: "Giuseppe",
+  contactPhone: "215-555-0188",
+  deliveryInstructions: "",
+};
+const vetriOrder = {
+  id: "ovetri",
+  customerId: "vetri",
+  territoryId: "philadelphia",
+  cycleId: "philadelphia-1",
+  cases: 4,
+  approvedAt: "2026-09-08T12:00:00",
+  status: "approved" as const,
+};
+const pizzeriaOrder = {
+  id: "opizzeria",
+  customerId: "pizzeria-vetri",
+  territoryId: "philadelphia",
+  cycleId: "philadelphia-1",
+  cases: 4,
+  approvedAt: "2026-09-08T12:00:00",
+  status: "approved" as const,
+};
+seedCustomerStoreForTests(
+  [...CUSTOMERS, vetriCustomer, pizzeriaVetri],
+  [...ORDERS, vetriOrder, pizzeriaOrder]
+);
+const { plan: philWithVetri, matrix: philMatrix } = await buildRoutePlan(
+  "philadelphia-1",
+  [...ORDERS, vetriOrder, pizzeriaOrder],
+  REF
+);
+assert(
+  philWithVetri.segments[0].stops[0]?.stopId !== "stop-pizzeria-vetri",
+  "Pizzeria Vetri should not take the Vetri first-stop slot"
+);
+assert(
+  philWithVetri.segments[0].stops[0]?.stopId === "stop-vetri",
+  `Vetri should be the first stop, got ${philWithVetri.segments[0].stops[0]?.stopId}`
+);
+assert(
+  philWithVetri.segments[0].validation.stopEtas["stop-vetri"] === "9:30 AM",
+  `Vetri should arrive at 9:30 AM, got ${philWithVetri.segments[0].validation.stopEtas["stop-vetri"]}`
+);
+assert(
+  !philWithVetri.segments[0].validation.warnings.some((w) => w.includes("before the default")),
+  "Vetri's 9:30 arrival should not warn about the 10:00 window"
+);
+const philSegId = philWithVetri.segments[0].id;
+const laterVetri = await setFirstStopTimeOverride(philWithVetri, philSegId, "10:15", philMatrix);
+assert(
+  laterVetri.segments[0].validation.stopEtas["stop-vetri"] === "10:15 AM",
+  "A manual first-stop time should override Vetri's 9:30 default"
+);
+const resetVetri = await setFirstStopTimeOverride(laterVetri, philSegId, null, philMatrix);
+assert(
+  resetVetri.segments[0].validation.stopEtas["stop-vetri"] === "9:30 AM",
+  "Clearing the first-stop time should return Vetri to 9:30 AM"
+);
+const movedOffFront = await applySegmentStops(
+  resetVetri,
+  [
+    {
+      segmentId: philSegId,
+      stops: [...resetVetri.segments[0].stops.slice(1), resetVetri.segments[0].stops[0]],
+    },
+  ],
+  philMatrix
+);
+assert(
+  movedOffFront.segments[0].stops[0]?.stopId !== "stop-vetri",
+  "Dragging Vetri off the front should be allowed"
+);
+const restoredVetri = await reoptimizeSegments(movedOffFront, [philSegId], philMatrix);
+assert(
+  restoredVetri.segments[0].stops[0]?.stopId === "stop-vetri",
+  "Re-optimize should put Vetri back first"
+);
+assert(
+  restoredVetri.segments[0].validation.stopEtas["stop-vetri"] === "9:30 AM",
+  "Re-optimized Vetri should arrive at 9:30 AM"
+);
+console.log("All Vetri first-stop tests passed.");
+

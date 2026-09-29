@@ -474,7 +474,9 @@ export default function App() {
                       ? plan.rollingTrafficApplied
                         ? "Google Maps (rolling traffic)"
                         : "Google Maps"
-                      : "estimated"}
+                      : plan.travelTimeSource === "osrm"
+                        ? "road estimate"
+                        : "straight-line estimate"}
                   </>
                 )}
                 {plan.hasManualOrder && (

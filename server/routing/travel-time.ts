@@ -19,7 +19,7 @@ export interface LegMetrics {
   distanceMeters: number;
 }
 
-export type TravelTimeSource = "google" | "estimated";
+export type TravelTimeSource = "google" | "osrm" | "estimated";
 
 export interface TravelMatrix {
   source: TravelTimeSource;
@@ -114,7 +114,64 @@ function uniquePoints(depot: Depot, stops: Stop[]): GeoPoint[] {
   return points;
 }
 
-/** Straight-line estimate matrix (tests / fallback when Google is unavailable). */
+interface OsrmTableResponse {
+  code?: string;
+  durations?: (number | null)[][];
+  distances?: (number | null)[][];
+}
+
+/**
+ * Road durations from the public OSRM table service.
+ * Used when Google Maps is not configured. Returns null if the request fails.
+ */
+async function fetchOsrmTable(points: GeoPoint[]): Promise<Map<string, LegMetrics> | null> {
+  if (points.length < 2 || points.length > 80) return null;
+
+  const coords = points.map((p) => `${p.lng},${p.lat}`).join(";");
+  const url = `https://router.project-osrm.org/table/v1/driving/${coords}?annotations=duration,distance`;
+
+  try {
+    const res = await fetch(url, {
+      headers: { "User-Agent": "PA-Wine-Routing/1.0 (Scranton warehouse)" },
+      signal: AbortSignal.timeout(12000),
+    });
+    if (!res.ok) return null;
+
+    const data = (await res.json()) as OsrmTableResponse;
+    if (data.code !== "Ok" || !data.durations || !data.distances) return null;
+
+    const legs = new Map<string, LegMetrics>();
+    for (let i = 0; i < points.length; i++) {
+      for (let j = 0; j < points.length; j++) {
+        if (i === j) continue;
+        const seconds = data.durations[i]?.[j];
+        const meters = data.distances[i]?.[j];
+        if (seconds == null || meters == null || !Number.isFinite(seconds) || !Number.isFinite(meters)) {
+          legs.set(legKey(points[i], points[j]), estimateLeg(points[i], points[j]));
+          continue;
+        }
+        legs.set(legKey(points[i], points[j]), {
+          durationMinutes: seconds / 60,
+          distanceMeters: meters,
+        });
+      }
+    }
+    return legs;
+  } catch {
+    return null;
+  }
+}
+
+async function createRoadOrEstimatedMatrix(depot: Depot, stops: Stop[]): Promise<TravelMatrix> {
+  const points = uniquePoints(depot, stops);
+  const osrmLegs = await fetchOsrmTable(points);
+  if (osrmLegs && osrmLegs.size > 0) {
+    return new TravelMatrixImpl("osrm", osrmLegs);
+  }
+  return createEstimatedTravelMatrix(depot, stops);
+}
+
+/** Straight-line estimate matrix (tests / fallback when road routing is unavailable). */
 export function createEstimatedTravelMatrix(depot: Depot, stops: Stop[]): TravelMatrix {
   const legs = new Map<string, LegMetrics>();
   const points = uniquePoints(depot, stops);
@@ -403,7 +460,7 @@ export async function buildTravelMatrix(
   const points = uniquePoints(depot, stops);
 
   if (!apiKey || isGoogleMapsBlocked() || points.length <= 1) {
-    return createEstimatedTravelMatrix(depot, stops);
+    return createRoadOrEstimatedMatrix(depot, stops);
   }
 
   const legs = new Map<string, LegMetrics>();
@@ -429,7 +486,7 @@ export async function buildTravelMatrix(
     }
   } catch (err) {
     recordGoogleMapsError("buildTravelMatrix", err);
-    return createEstimatedTravelMatrix(depot, stops);
+    return createRoadOrEstimatedMatrix(depot, stops);
   }
 
   // Fill any missing pairs with straight-line estimates.

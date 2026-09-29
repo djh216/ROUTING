@@ -38,6 +38,7 @@ import {
   type GeoPoint,
   type TravelMatrix,
 } from "./travel-time.js";
+import { isVetriStopName, VETRI_FIRST_STOP_TIME } from "../../shared/routeDefaults.js";
 import { getStopPriorityFilter } from "./route-priorities.js";
 import { isGoogleMapsBlocked } from "./google-maps-status.js";
 
@@ -122,6 +123,22 @@ function applyMultiDaySegmentMeta(plan: RoutePlan, segments: Segment[]): Segment
 
 function stopPoint(stop: Stop): GeoPoint {
   return { lat: stop.lat, lng: stop.lng };
+}
+
+function isVetriStop(stop: Stop): boolean {
+  return isVetriStopName(stop.customerName);
+}
+
+/** Manual override wins. Otherwise Vetri's first stop defaults to 9:30 AM. */
+function firstStopArrivalMinutesFor(
+  firstStop: Stop | undefined,
+  firstStopTime?: string
+): number | undefined {
+  if (firstStopTime) return parseDeliveryTime(firstStopTime) ?? undefined;
+  if (firstStop && isVetriStop(firstStop)) {
+    return parseDeliveryTime(VETRI_FIRST_STOP_TIME) ?? undefined;
+  }
+  return undefined;
 }
 
 export function ordersToStops(orders: Order[]): Stop[] {
@@ -299,17 +316,35 @@ function optimizeStopOrderCore(
   return bestRoute;
 }
 
-export function optimizeStopOrder(
+function optimizeStopOrderFrom(
   stops: Stop[],
-  startLat: number,
-  startLng: number,
+  start: GeoPoint,
   depot: Depot,
   returnToDepot: boolean,
   matrix: TravelMatrix,
   priorityFilter?: (stop: Stop) => boolean
 ): Stop[] {
   if (stops.length <= 1) return [...stops];
-  const start: GeoPoint = { lat: startLat, lng: startLng };
+
+  const pinned = stops.filter(isVetriStop);
+  const unpinned = stops.filter((s) => !isVetriStop(s));
+  if (pinned.length > 0 && unpinned.length > 0) {
+    const pinnedRoute =
+      pinned.length === 1
+        ? pinned
+        : optimizeStopOrderCore(pinned, start, depot, false, matrix);
+    const last = pinnedRoute[pinnedRoute.length - 1];
+    const restStart = last ? stopPoint(last) : start;
+    const restRoute = optimizeStopOrderFrom(
+      unpinned,
+      restStart,
+      depot,
+      returnToDepot,
+      matrix,
+      priorityFilter
+    );
+    return [...pinnedRoute, ...restRoute];
+  }
 
   if (priorityFilter) {
     const priority = stops.filter(priorityFilter);
@@ -324,6 +359,20 @@ export function optimizeStopOrder(
   }
 
   return optimizeStopOrderCore(stops, start, depot, returnToDepot, matrix);
+}
+
+export function optimizeStopOrder(
+  stops: Stop[],
+  startLat: number,
+  startLng: number,
+  depot: Depot,
+  returnToDepot: boolean,
+  matrix: TravelMatrix,
+  priorityFilter?: (stop: Stop) => boolean
+): Stop[] {
+  if (stops.length <= 1) return [...stops];
+  const start: GeoPoint = { lat: startLat, lng: startLng };
+  return optimizeStopOrderFrom(stops, start, depot, returnToDepot, matrix, priorityFilter);
 }
 
 function assignStopsToTrucks(
@@ -342,6 +391,17 @@ function assignStopsToTrucks(
     const truck: Stop[] = [];
     let cases = 0;
     let cur: GeoPoint = { lat: depot.lat, lng: depot.lng };
+
+    if (trucks.length === 0) {
+      const pinned = remaining.filter(isVetriStop);
+      for (const next of pinned) {
+        const idx = remaining.indexOf(next);
+        if (idx >= 0) remaining.splice(idx, 1);
+        truck.push(next);
+        cases += next.cases;
+        cur = stopPoint(next);
+      }
+    }
 
     while (remaining.length > 0) {
       const priorityPool =
@@ -389,6 +449,7 @@ interface LegSimulation {
   totalRouteMinutes: number;
   stopEtas: Record<string, string>;
   stopDriveMinutes: Record<string, number>;
+  returnDriveMinutes?: number;
   warnings: string[];
   errors: string[];
 }
@@ -402,6 +463,12 @@ function serviceMinutesForStop(
     return Math.max(SERVICE_MINUTES_PER_STOP, Math.round(override));
   }
   return SERVICE_MINUTES_PER_STOP;
+}
+
+/** Whole minutes used on the schedule. A real hop under a minute still takes 1. */
+function scheduleDriveMinutes(minutes: number): number {
+  if (!(minutes > 0)) return 0;
+  return Math.max(1, Math.round(minutes));
 }
 
 function driveMinutesForStop(
@@ -462,15 +529,17 @@ function simulateLeg(
   }
 
   const first = stopMap.get(stopIds[0])!;
-  const travelToFirstMinutes = driveMinutesForStop(
-    stopIds[0],
-    start,
-    stopPoint(first),
-    matrix,
-    driveOverrides,
-    rollingDriveMinutes
+  const travelToFirstMinutes = scheduleDriveMinutes(
+    driveMinutesForStop(
+      stopIds[0],
+      start,
+      stopPoint(first),
+      matrix,
+      driveOverrides,
+      rollingDriveMinutes
+    )
   );
-  stopDriveMinutes[stopIds[0]] = Math.round(travelToFirstMinutes);
+  stopDriveMinutes[stopIds[0]] = travelToFirstMinutes;
   let totalDriveMinutes = travelToFirstMinutes;
   const firstArrival = firstStopArrivalMinutes ?? winStart;
   const departureTime = firstArrival - travelToFirstMinutes;
@@ -489,7 +558,9 @@ function simulateLeg(
   } else if (firstArrival > winEnd - 30) {
     warnings.push(`${first.customerName}: tight window (ETA ${formatTime(firstArrival)})`);
   }
-  if (firstArrival < winStart) {
+  const vetriOpensEarly =
+    isVetriStop(first) && firstArrival === parseTime(VETRI_FIRST_STOP_TIME);
+  if (firstArrival < winStart && !vetriOpensEarly) {
     warnings.push(
       `First stop at ${formatTime(firstArrival)} is before the default ${formatTimeOfDay(windowStart)} window start`
     );
@@ -505,15 +576,17 @@ function simulateLeg(
     const stopId = stopIds[i];
     const stop = stopMap.get(stopId);
     if (!stop) continue;
-    const driveMinutes = driveMinutesForStop(
-      stopId,
-      cur,
-      stopPoint(stop),
-      matrix,
-      driveOverrides,
-      rollingDriveMinutes
+    const driveMinutes = scheduleDriveMinutes(
+      driveMinutesForStop(
+        stopId,
+        cur,
+        stopPoint(stop),
+        matrix,
+        driveOverrides,
+        rollingDriveMinutes
+      )
     );
-    stopDriveMinutes[stopId] = Math.round(driveMinutes);
+    stopDriveMinutes[stopId] = driveMinutes;
     totalDriveMinutes += driveMinutes;
     t += driveMinutes;
     if (t > winEnd) {
@@ -529,12 +602,14 @@ function simulateLeg(
     cur = stopPoint(stop);
   }
 
+  let returnDriveMinutes: number | undefined;
   if (returnToDepot) {
-    const returnMinutes =
+    returnDriveMinutes = scheduleDriveMinutes(
       rollingReturnMinutes ??
-      matrix.getDurationMinutes(cur, { lat: depot.lat, lng: depot.lng });
-    totalDriveMinutes += returnMinutes;
-    t += returnMinutes;
+        matrix.getDurationMinutes(cur, { lat: depot.lat, lng: depot.lng })
+    );
+    totalDriveMinutes += returnDriveMinutes;
+    t += returnDriveMinutes;
   }
 
   const driverHours = (t - departureTime) / 60;
@@ -555,6 +630,7 @@ function simulateLeg(
     totalRouteMinutes: Math.round(t - departureTime),
     stopEtas,
     stopDriveMinutes,
+    returnDriveMinutes,
     warnings,
     errors,
   };
@@ -1045,9 +1121,8 @@ function validateSegment(
       ? { lat: depot.lat, lng: depot.lng }
       : { lat: prevEndLat ?? depot.lat, lng: prevEndLng ?? depot.lng };
 
-  const firstStopArrivalMinutes = firstStopTime
-    ? parseDeliveryTime(firstStopTime) ?? undefined
-    : undefined;
+  const firstStop = stopMap.get(stopIds[0]);
+  const firstStopArrivalMinutes = firstStopArrivalMinutesFor(firstStop, firstStopTime);
 
   const leg = simulateLeg(
     stopIds,
@@ -1110,6 +1185,7 @@ function validateSegment(
       } else {
         const optBreakIdx =
           breakAfterStopIndex >= 0 ? driverBreakAfterStopIndex(optStopIds.length) : -1;
+        const optFirstStop = stopMap.get(optStopIds[0]);
         const optLeg = simulateLeg(
           optStopIds,
           stopMap,
@@ -1120,7 +1196,7 @@ function validateSegment(
           segment.endLocation === "Scranton",
           matrix,
           undefined,
-          firstStopArrivalMinutes,
+          firstStopArrivalMinutesFor(optFirstStop, firstStopTime),
           undefined,
           undefined,
           serviceOverrides,
@@ -1142,6 +1218,7 @@ function validateSegment(
     totalDriveMinutes: leg.totalDriveMinutes,
     totalRouteMinutes: leg.totalRouteMinutes,
     stopDriveMinutes: leg.stopDriveMinutes,
+    returnDriveMinutes: leg.returnDriveMinutes,
     stopBaseDriveMinutes: rollingBaseDriveMinutes,
     stopTrafficMinutes: rollingTrafficMinutes,
     driverBreakMinutes: breakAfterStopIndex >= 0 ? DRIVER_BREAK_MINUTES : 0,
@@ -1297,6 +1374,12 @@ export async function revalidatePlanSegments(
     let rollingBaseDriveMinutes: Record<string, number> | undefined;
     let rollingTrafficMinutes: Record<string, number> | undefined;
 
+    const firstStopTimeOverride = plan.firstStopTimeOverrides?.[updated[i].id];
+    const leadingStop = stopIds[0] ? stopMap.get(stopIds[0]) : undefined;
+    const effectiveFirstStopTime =
+      firstStopTimeOverride ??
+      (leadingStop && isVetriStop(leadingStop) ? VETRI_FIRST_STOP_TIME : undefined);
+
     if (useRollingTraffic && stopIds.length > 0) {
       const manualOverrides = plan.driveMinuteOverrides?.[updated[i].id];
       const rolling = await computeRollingSegmentDriveTimes({
@@ -1305,7 +1388,7 @@ export async function revalidatePlanSegments(
         start,
         deliveryDate: updated[i].deliveryDate,
         windowStart: cycle.deliveryStart,
-        firstStopTime: plan.firstStopTimeOverrides?.[updated[i].id],
+        firstStopTime: effectiveFirstStopTime,
         driveOverrides: manualOverrides,
         serviceOverrides: plan.serviceMinuteOverrides?.[updated[i].id],
         breakAfterStopId: plan.driverBreakAfterStop?.[updated[i].id],
@@ -1336,7 +1419,7 @@ export async function revalidatePlanSegments(
       prevEnd?.lat,
       prevEnd?.lng,
       plan.driveMinuteOverrides?.[updated[i].id],
-      plan.firstStopTimeOverrides?.[updated[i].id],
+      firstStopTimeOverride,
       rollingDriveMinutes,
       rollingReturnMinutes,
       rollingBaseDriveMinutes,

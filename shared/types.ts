@@ -156,6 +156,8 @@ export interface SegmentValidation {
   driverBreakAfterStopId?: string;
   /** Google Maps (or estimated) drive minutes from previous location to each stop */
   stopDriveMinutes?: Record<string, number>;
+  /** Drive minutes from the last stop back to the depot, when this segment returns */
+  returnDriveMinutes?: number;
   /** Typical (non-traffic) drive minutes per stop when Google traffic data exists */
   stopBaseDriveMinutes?: Record<string, number>;
   /** Extra drive minutes vs typical (non-traffic) for each stop when Google traffic data exists */
@@ -199,7 +201,7 @@ export interface RoutePlan {
   suggestedWedThreshold?: number;
   status: RoutePlanStatus;
   /** Whether drive times came from Google Maps or straight-line estimates */
-  travelTimeSource?: "google" | "estimated";
+  travelTimeSource?: "google" | "osrm" | "estimated";
   /** ETAs used per-leg Google traffic at rolling departure times */
   rollingTrafficApplied?: boolean;
   /** Manual drive minutes to each stop, by segment then stop id */

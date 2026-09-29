@@ -123,17 +123,18 @@ export function buildSegmentRoutes(
         let toName = i < stops.length ? stops[i]?.customerName ?? `Stop ${i + 1}` : "Scranton Depot (Return)";
         let toStopId = i < stops.length ? stops[i]?.id : undefined;
 
+        const scheduledDrive = toStopId
+          ? segment.validation.stopDriveMinutes?.[toStopId]
+          : segment.validation.returnDriveMinutes;
         const trafficM = toStopId && segment.validation.stopTrafficMinutes?.[toStopId] != null
           ? segment.validation.stopTrafficMinutes[toStopId]
           : 0;
         const baseM = toStopId && segment.validation.stopBaseDriveMinutes?.[toStopId] != null
           ? segment.validation.stopBaseDriveMinutes[toStopId]
-          : toStopId && segment.validation.stopDriveMinutes?.[toStopId] != null
-          ? segment.validation.stopDriveMinutes[toStopId]
+          : scheduledDrive != null
+          ? scheduledDrive
           : 0;
-        const driveM = toStopId && segment.validation.stopDriveMinutes?.[toStopId] != null
-          ? segment.validation.stopDriveMinutes[toStopId]
-          : baseM + trafficM;
+        const driveM = scheduledDrive != null ? scheduledDrive : baseM + trafficM;
 
         let delayLevel: TrafficDelayLevel = "normal";
         if (trafficM >= 8 || (trafficM >= 5 && baseM > 0 && trafficM / baseM >= 0.25)) {
