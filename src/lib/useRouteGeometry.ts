@@ -39,14 +39,28 @@ export function useRouteGeometry(
   } | null>(null);
   const [loading, setLoading] = useState(false);
   const requestId = useRef(0);
+  const lastFetchedRefreshKey = useRef(0);
+  const routeKeyRef = useRef("");
   const routeKey = useMemo(
     () => segmentRoutesCacheKey(plan, previewSegments),
     [plan, previewSegments]
   );
+  routeKeyRef.current = routeKey;
 
   useEffect(() => {
     if (!cycleId) {
       setGeometry(null);
+      lastFetchedRefreshKey.current = 0;
+      return;
+    }
+
+    if (geometryRefreshKey <= 0) {
+      setGeometry(null);
+      lastFetchedRefreshKey.current = 0;
+      return;
+    }
+
+    if (geometryRefreshKey === lastFetchedRefreshKey.current) {
       return;
     }
 
@@ -54,55 +68,44 @@ export function useRouteGeometry(
       return;
     }
 
-    const debounceMs = !freezeGeometry && previewSegments ? 250 : 0;
+    lastFetchedRefreshKey.current = geometryRefreshKey;
     const controller = new AbortController();
-    let timer: ReturnType<typeof setTimeout> | undefined;
+    const keyAtFetch = routeKeyRef.current;
+    const id = ++requestId.current;
+    setLoading(true);
 
-    const run = () => {
-      const id = ++requestId.current;
-      setLoading(true);
-      void fetchRouteGeometry(
-        cycleId,
-        !freezeGeometry && previewSegments ? { segments: previewSegments } : undefined,
-        controller.signal
-      )
-        .then((result) => {
-          if (id !== requestId.current) return;
-          const segMap = toGeometryMap(result);
-          const pathMap = new Map(
-            Array.from(segMap.entries()).map(([k, v]) => [k, v.path])
-          );
-          setGeometry({
-            routeKey,
-            segments: segMap,
-            paths: pathMap,
-            trafficSummary: result.trafficSummary,
-            source: result.source,
-          });
-        })
-        .catch((err) => {
-          if (controller.signal.aborted) return;
-          if (id !== requestId.current) return;
-          console.warn("Route geometry fetch failed:", err);
-        })
-        .finally(() => {
-          if (id === requestId.current) setLoading(false);
+    void fetchRouteGeometry(
+      cycleId,
+      !freezeGeometry && previewSegments ? { segments: previewSegments } : undefined,
+      controller.signal
+    )
+      .then((result) => {
+        if (id !== requestId.current) return;
+        const segMap = toGeometryMap(result);
+        const pathMap = new Map(
+          Array.from(segMap.entries()).map(([k, v]) => [k, v.path])
+        );
+        setGeometry({
+          routeKey: keyAtFetch,
+          segments: segMap,
+          paths: pathMap,
+          trafficSummary: result.trafficSummary,
+          source: result.source,
         });
-    };
-
-    if (debounceMs > 0) {
-      timer = setTimeout(run, debounceMs);
-    } else {
-      run();
-    }
+      })
+      .catch((err) => {
+        if (controller.signal.aborted) return;
+        if (id !== requestId.current) return;
+        console.warn("Route geometry fetch failed:", err);
+      })
+      .finally(() => {
+        if (id === requestId.current) setLoading(false);
+      });
 
     return () => {
       controller.abort();
-      if (timer) clearTimeout(timer);
     };
-  }, freezeGeometry
-    ? [cycleId, geometryRefreshKey, freezeGeometry]
-    : [cycleId, previewSegments, routeKey, freezeGeometry]);
+  }, [cycleId, geometryRefreshKey, freezeGeometry, previewSegments]);
 
   const geometrySegments = useMemo(() => {
     if (!geometry) return null;

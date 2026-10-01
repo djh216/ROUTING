@@ -1328,11 +1328,17 @@ export function migrateDriverBreakAfterStop(
   return Object.keys(next).length > 0 ? next : undefined;
 }
 
+export type RevalidatePlanOptions = {
+  /** When true, fetches per-leg Google traffic at scheduled departure times. */
+  applyRollingTraffic?: boolean;
+};
+
 export async function revalidatePlanSegments(
   plan: RoutePlan,
   segments: Segment[],
   matrix: TravelMatrix,
-  apiKey?: string
+  apiKey?: string,
+  options?: RevalidatePlanOptions
 ): Promise<{
   segments: Segment[];
   rollingTrafficApplied: boolean;
@@ -1350,7 +1356,8 @@ export async function revalidatePlanSegments(
   let prevLng = SCRANTON_DEPOT.lng;
   let rollingTrafficApplied = false;
   const googleKey = apiKey ?? process.env.GOOGLE_MAPS_API_KEY;
-  const useRollingTraffic = !!googleKey && !isGoogleMapsBlocked();
+  const useRollingTraffic =
+    options?.applyRollingTraffic === true && !!googleKey && !isGoogleMapsBlocked();
 
   for (let i = 0; i < updated.length; i++) {
     const prevEnd =
@@ -1618,7 +1625,9 @@ export async function buildRoutePlan(
     optimizedRouteMinutes,
     timeDiffMinutes,
     hasManualOrder,
-  } = await revalidatePlanSegments(draftPlan, segments, matrix);
+  } = await revalidatePlanSegments(draftPlan, segments, matrix, undefined, {
+    applyRollingTraffic: false,
+  });
 
   const suggestedWedThreshold =
     cycle.multiDay
@@ -1644,6 +1653,35 @@ export async function buildRoutePlan(
       hasManualOrder,
     },
     matrix,
+  };
+}
+
+/** Recompute ETAs with live Google traffic for the current stop order (manual refresh). */
+export async function refreshPlanRollingTraffic(
+  plan: RoutePlan,
+  travelMatrix?: TravelMatrix
+): Promise<RoutePlan> {
+  const matrix = resolveMatrix(SCRANTON_DEPOT, plan.allStops, travelMatrix);
+  const {
+    segments,
+    rollingTrafficApplied,
+    totalRouteMinutes,
+    optimizedRouteMinutes,
+    timeDiffMinutes,
+    hasManualOrder,
+  } = await revalidatePlanSegments(plan, plan.segments, matrix, undefined, {
+    applyRollingTraffic: true,
+  });
+
+  return {
+    ...plan,
+    segments,
+    rollingTrafficApplied,
+    travelTimeSource: matrix.source,
+    totalRouteMinutes,
+    optimizedRouteMinutes,
+    timeDiffMinutes,
+    hasManualOrder,
   };
 }
 
@@ -1679,11 +1717,9 @@ export async function applySegmentStops(
     optimizedRouteMinutes,
     timeDiffMinutes,
     hasManualOrder,
-  } = await revalidatePlanSegments(
-    nextPlan,
-    updatedSegments,
-    matrix
-  );
+  } = await revalidatePlanSegments(nextPlan, updatedSegments, matrix, undefined, {
+    applyRollingTraffic: false,
+  });
 
   return {
     ...nextPlan,
@@ -1695,6 +1731,41 @@ export async function applySegmentStops(
     timeDiffMinutes,
     hasManualOrder,
   };
+}
+
+/** Append a stop to one day or truck. Other stops keep their current order. */
+export async function appendStopToSegment(
+  plan: RoutePlan,
+  stop: Stop,
+  segmentId: string,
+  travelMatrix?: TravelMatrix
+): Promise<{ plan: RoutePlan; matrix: TravelMatrix }> {
+  const segment = plan.segments.find((s) => s.id === segmentId);
+  if (!segment) throw new Error("Choose a day or truck on this route");
+  if (plan.allStops.some((s) => s.id === stop.id || s.customerId === stop.customerId)) {
+    throw new Error(`${stop.customerName} is already on this route`);
+  }
+
+  const allStops = [...plan.allStops, stop];
+  const matrix =
+    travelMatrix ??
+    (await buildTravelMatrix(SCRANTON_DEPOT, allStops, {
+      departureTime: deliveryDepartureTimestamp(plan.deliveryDate),
+    }));
+
+  const updated = await applySegmentStops(
+    { ...plan, allStops },
+    plan.segments.map((seg) => ({
+      segmentId: seg.id,
+      stops:
+        seg.id === segmentId
+          ? [...seg.stops, { stopId: stop.id, position: seg.stops.length }]
+          : seg.stops,
+    })),
+    matrix
+  );
+
+  return { plan: updated, matrix };
 }
 
 export async function setFirstStopTimeOverride(

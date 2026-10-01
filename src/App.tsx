@@ -9,7 +9,6 @@ import {
   addDay,
   addTruck,
   assignStopToDay,
-  assignStopToTruck,
   fetchBatches,
   fetchRoutePlan,
   clearRouteOrders,
@@ -23,14 +22,19 @@ import {
   setStopServiceTime,
   setWedThreshold,
   reoptimizeSegments,
-  flipRouteSegment,
   swapSegmentRoutes,
+  applyRollingTraffic,
   updateSegments,
   updateStopDeliveryInstructions,
   updateStopContact,
 } from "./lib/api";
-import { applySegmentUpdates, type SegmentUpdate } from "./lib/segmentDrag";
+import {
+  applySegmentUpdates,
+  segmentUpdatesFromPlan,
+  type SegmentUpdate,
+} from "./lib/segmentDrag";
 import { formatDateTime, formatDurationMinutes } from "@shared/timeFormat";
+import { NEW_DAY_SEGMENT_ID } from "@shared/constants";
 import type { BatchSummary, RoutePlan } from "@shared/types";
 
 export default function App() {
@@ -43,10 +47,35 @@ export default function App() {
   const [previewSegments, setPreviewSegments] = useState<SegmentUpdate[] | null>(null);
   const [activeStopId, setActiveStopId] = useState<string | null>(null);
   const [mapGeometryRefreshKey, setMapGeometryRefreshKey] = useState(0);
+  const [pendingRouteOrder, setPendingRouteOrder] = useState(false);
+  const [applyingRouteOrder, setApplyingRouteOrder] = useState(false);
+  const [refreshingTraffic, setRefreshingTraffic] = useState(false);
+  const [trafficRefreshError, setTrafficRefreshError] = useState<string | null>(null);
 
   const refreshMapGeometry = useCallback(() => {
     setMapGeometryRefreshKey((k) => k + 1);
   }, []);
+
+  const handleRefreshTraffic = useCallback(async () => {
+    if (!selectedCycleId || !plan) return;
+    setRefreshingTraffic(true);
+    setTrafficRefreshError(null);
+    try {
+      const updated = await applyRollingTraffic(
+        selectedCycleId,
+        segmentUpdatesFromPlan(plan)
+      );
+      setPlan(updated);
+      setPendingRouteOrder(false);
+      refreshMapGeometry();
+    } catch (e) {
+      setTrafficRefreshError(
+        e instanceof Error ? e.message : "Failed to refresh traffic"
+      );
+    } finally {
+      setRefreshingTraffic(false);
+    }
+  }, [selectedCycleId, plan, refreshMapGeometry]);
 
   const loadBatches = useCallback(() => {
     return fetchBatches().then((b) => {
@@ -66,6 +95,8 @@ export default function App() {
   useEffect(() => {
     setPreviewSegments(null);
     setActiveStopId(null);
+    setPendingRouteOrder(false);
+    setMapGeometryRefreshKey(0);
     if (!selectedCycleId) {
       setPlan(null);
       return;
@@ -74,35 +105,61 @@ export default function App() {
     fetchRoutePlan(selectedCycleId)
       .then((p) => {
         setPlan(p);
-        refreshMapGeometry();
       })
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false));
-  }, [selectedCycleId, refreshMapGeometry]);
+  }, [selectedCycleId]);
 
-  const handleUpdate = useCallback(
-    async (segments: SegmentUpdate[]) => {
-      if (!selectedCycleId) return;
+  const handleUpdate = useCallback((segments: SegmentUpdate[]) => {
+    setPreviewSegments(null);
+    setPlan((current) => {
+      if (!current) return current;
+      return {
+        ...applySegmentUpdates(current, segments),
+        rollingTrafficApplied: false,
+      };
+    });
+    setPendingRouteOrder(true);
+    setMapGeometryRefreshKey(0);
+  }, []);
+
+  const handleApplyRouteOrder = useCallback(async () => {
+    if (!selectedCycleId || !plan) return;
+    setApplyingRouteOrder(true);
+    setError(null);
+    try {
+      const updated = await updateSegments(selectedCycleId, segmentUpdatesFromPlan(plan));
+      setPlan(updated);
+      setPendingRouteOrder(false);
       setPreviewSegments(null);
-      setPlan((current) => (current ? applySegmentUpdates(current, segments) : current));
-      try {
-        const updated = await updateSegments(selectedCycleId, segments);
-        setPlan(updated);
-        refreshMapGeometry();
-      } catch (e) {
-        setError(e instanceof Error ? e.message : "Failed to update route");
-        const restored = await fetchRoutePlan(selectedCycleId);
-        setPlan(restored);
-      }
-    },
-    [selectedCycleId, refreshMapGeometry]
-  );
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to update route times");
+    } finally {
+      setApplyingRouteOrder(false);
+    }
+  }, [selectedCycleId, plan]);
+
+  const handleDiscardRouteOrder = useCallback(async () => {
+    if (!selectedCycleId) return;
+    setApplyingRouteOrder(true);
+    try {
+      const restored = await fetchRoutePlan(selectedCycleId);
+      setPlan(restored);
+      setPendingRouteOrder(false);
+      setPreviewSegments(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to reload route");
+    } finally {
+      setApplyingRouteOrder(false);
+    }
+  }, [selectedCycleId]);
 
   const handleWedThreshold = useCallback(
     async (n: number) => {
       if (!selectedCycleId) return;
       const updated = await setWedThreshold(selectedCycleId, n);
       setPlan(updated);
+      setPendingRouteOrder(false);
     },
     [selectedCycleId]
   );
@@ -111,6 +168,7 @@ export default function App() {
     if (!selectedCycleId) return;
     const updated = await addTruck(selectedCycleId);
     setPlan(updated);
+    setPendingRouteOrder(false);
   }, [selectedCycleId]);
 
   const handleAddDay = useCallback(async () => {
@@ -118,12 +176,12 @@ export default function App() {
     try {
       const updated = await addDay(selectedCycleId);
       setPlan(updated);
+      setPendingRouteOrder(false);
       setPreviewSegments(null);
-      refreshMapGeometry();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to add Friday");
     }
-  }, [selectedCycleId, refreshMapGeometry]);
+  }, [selectedCycleId]);
 
   const handleReoptimizeSegment = useCallback(
     async (segmentId: string) => {
@@ -131,13 +189,13 @@ export default function App() {
       try {
         const updated = await reoptimizeSegments(selectedCycleId, segmentId);
         setPlan(updated);
+        setPendingRouteOrder(false);
         setPreviewSegments(null);
-        refreshMapGeometry();
       } catch (e) {
         setError(e instanceof Error ? e.message : "Failed to re-optimize truck");
       }
     },
-    [selectedCycleId, refreshMapGeometry]
+    [selectedCycleId]
   );
 
   const handleReoptimizeAllSegments = useCallback(async () => {
@@ -145,26 +203,30 @@ export default function App() {
     try {
       const updated = await reoptimizeSegments(selectedCycleId);
       setPlan(updated);
+      setPendingRouteOrder(false);
       setPreviewSegments(null);
-      refreshMapGeometry();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to re-optimize trucks");
     }
-  }, [selectedCycleId, refreshMapGeometry]);
+  }, [selectedCycleId]);
 
   const handleFlipSegment = useCallback(
-    async (segmentId?: string) => {
-      if (!selectedCycleId) return;
-      try {
-        const updated = await flipRouteSegment(selectedCycleId, segmentId);
-        setPlan(updated);
-        setPreviewSegments(null);
-        refreshMapGeometry();
-      } catch (e) {
-        setError(e instanceof Error ? e.message : "Failed to flip route");
-      }
+    (segmentId?: string) => {
+      if (!plan) return;
+      const flipThese = new Set(
+        segmentId ? [segmentId] : plan.segments.map((segment) => segment.id)
+      );
+      handleUpdate(
+        plan.segments.map((seg) => {
+          const stops = flipThese.has(seg.id) ? [...seg.stops].reverse() : seg.stops;
+          return {
+            segmentId: seg.id,
+            stops: stops.map((s, position) => ({ stopId: s.stopId, position })),
+          };
+        })
+      );
     },
-    [selectedCycleId, refreshMapGeometry]
+    [plan, handleUpdate]
   );
 
   const handleSwapSegments = useCallback(
@@ -173,42 +235,74 @@ export default function App() {
       try {
         const updated = await swapSegmentRoutes(selectedCycleId, segmentIdA, segmentIdB);
         setPlan(updated);
+        setPendingRouteOrder(false);
         setPreviewSegments(null);
-        refreshMapGeometry();
       } catch (e) {
         setError(e instanceof Error ? e.message : "Failed to switch days' routes");
-      }
-    },
-    [selectedCycleId, refreshMapGeometry]
-  );
-
-  const handleAssignTruck = useCallback(
-    async (stopId: string, truckNumber: number) => {
-      if (!selectedCycleId) return;
-      try {
-        const updated = await assignStopToTruck(selectedCycleId, stopId, truckNumber);
-        setPlan(updated);
-        setPreviewSegments(null);
-      } catch (e) {
-        setError(e instanceof Error ? e.message : "Failed to assign stop to truck");
       }
     },
     [selectedCycleId]
   );
 
+  const handleAssignTruck = useCallback(
+    (stopId: string, truckNumber: number) => {
+      if (!plan) return;
+      const targetSegment = plan.segments[truckNumber - 1];
+      if (!targetSegment) return;
+      const fromSegment = plan.segments.find((s) => s.stops.some((st) => st.stopId === stopId));
+      if (!fromSegment || fromSegment.id === targetSegment.id) return;
+
+      handleUpdate(
+        plan.segments.map((seg) => {
+          let stops = seg.stops.filter((s) => s.stopId !== stopId);
+          if (seg.id === targetSegment.id) {
+            stops = [...stops, { stopId, position: stops.length }];
+          }
+          return {
+            segmentId: seg.id,
+            stops: stops.map((s, position) => ({ stopId: s.stopId, position })),
+          };
+        })
+      );
+    },
+    [plan, handleUpdate]
+  );
+
   const handleAssignDay = useCallback(
     async (stopId: string, targetSegmentId: string) => {
       if (!selectedCycleId) return;
+      if (targetSegmentId !== NEW_DAY_SEGMENT_ID) {
+        if (!plan) return;
+        const fromSegment = plan.segments.find((s) => s.stops.some((st) => st.stopId === stopId));
+        if (!fromSegment || fromSegment.id === targetSegmentId) return;
+        const targetSegment = plan.segments.find((s) => s.id === targetSegmentId);
+        if (!targetSegment) return;
+
+        handleUpdate(
+          plan.segments.map((seg) => {
+            let stops = seg.stops.filter((s) => s.stopId !== stopId);
+            if (seg.id === targetSegmentId) {
+              stops = [...stops, { stopId, position: stops.length }];
+            }
+            return {
+              segmentId: seg.id,
+              stops: stops.map((s, position) => ({ stopId: s.stopId, position })),
+            };
+          })
+        );
+        return;
+      }
+
       try {
         const updated = await assignStopToDay(selectedCycleId, stopId, targetSegmentId);
         setPlan(updated);
+        setPendingRouteOrder(false);
         setPreviewSegments(null);
-        refreshMapGeometry();
       } catch (e) {
         setError(e instanceof Error ? e.message : "Failed to switch day for stop");
       }
     },
-    [selectedCycleId, refreshMapGeometry]
+    [selectedCycleId, plan, handleUpdate]
   );
 
   const handleDriveTimeChange = useCallback(
@@ -325,8 +419,8 @@ export default function App() {
     }
     const updated = await fetchRoutePlan(nextId);
     setPlan(updated);
-    refreshMapGeometry();
-  }, [refreshMapGeometry]);
+    setMapGeometryRefreshKey(0);
+  }, []);
 
   const handleOrdersApplied = useCallback(async () => {
     await refreshAfterOrderChange(selectedCycleId);
@@ -349,13 +443,13 @@ export default function App() {
 
   const handleStopAdded = useCallback(async (updatedPlan: RoutePlan) => {
     setPlan(updatedPlan);
+    setPendingRouteOrder(false);
     setPreviewSegments(null);
     setActiveStopId(null);
-    refreshMapGeometry();
     const b = await fetchBatches();
     setBatches(b);
     setOrderListKey((k) => k + 1);
-  }, [refreshMapGeometry]);
+  }, []);
 
   const handleClearRoute = useCallback(async () => {
     if (!selectedCycleId) return;
@@ -372,7 +466,8 @@ export default function App() {
     if (!selectedCycleId) return;
     const updated = await resetRoute(selectedCycleId);
     setPlan(updated);
-    refreshMapGeometry();
+    setPendingRouteOrder(false);
+    setMapGeometryRefreshKey(0);
   };
 
   const handleLock = async () => {
@@ -409,7 +504,7 @@ export default function App() {
             type="button"
             className="btn btn--secondary"
             onClick={handleReset}
-            disabled={!plan || plan.status === "locked"}
+            disabled={!plan || plan.status === "locked" || pendingRouteOrder}
           >
             Reset to suggested
           </button>
@@ -422,7 +517,7 @@ export default function App() {
               type="button"
               className="btn btn--primary"
               onClick={() => void handleLock()}
-              disabled={!plan}
+              disabled={!plan || pendingRouteOrder}
             >
               Lock route
             </button>
@@ -446,7 +541,22 @@ export default function App() {
           refreshKey={orderListKey}
           onApplied={() => void handleOrdersApplied()}
         />
-        <ManualOrderForm onAdded={() => void handleOrdersApplied()} />
+        <ManualOrderForm
+          activePlan={plan}
+          onAdded={(updatedPlan) => {
+            if (updatedPlan && updatedPlan.cycleId === selectedCycleId) {
+              setPlan(updatedPlan);
+              setPendingRouteOrder(false);
+              setPreviewSegments(null);
+              setActiveStopId(null);
+              setMapGeometryRefreshKey(0);
+              setOrderListKey((k) => k + 1);
+              void fetchBatches().then(setBatches);
+              return;
+            }
+            void handleOrdersApplied();
+          }}
+        />
       </aside>
 
       <main className="main">
@@ -472,8 +582,8 @@ export default function App() {
                     · Drive times:{" "}
                     {plan.travelTimeSource === "google"
                       ? plan.rollingTrafficApplied
-                        ? "Google Maps (rolling traffic)"
-                        : "Google Maps"
+                        ? "Google Maps (live traffic applied)"
+                        : "Google Maps (refresh traffic for live delays)"
                       : plan.travelTimeSource === "osrm"
                         ? "road estimate"
                         : "straight-line estimate"}
@@ -497,8 +607,18 @@ export default function App() {
               cycleId={selectedCycleId!}
               plan={plan}
               mapGeometryRefreshKey={mapGeometryRefreshKey}
+              trafficRefreshPending={
+                plan.travelTimeSource === "google" && !plan.rollingTrafficApplied
+              }
+              refreshingTraffic={refreshingTraffic}
+              trafficRefreshError={trafficRefreshError}
+              onRefreshTraffic={() => void handleRefreshTraffic()}
               previewSegments={previewSegments}
               activeStopId={activeStopId}
+              pendingRouteOrder={pendingRouteOrder}
+              applyingRouteOrder={applyingRouteOrder}
+              onApplyRouteOrder={() => void handleApplyRouteOrder()}
+              onDiscardRouteOrder={() => void handleDiscardRouteOrder()}
               onUpdate={handleUpdate}
               onPreviewSegments={setPreviewSegments}
               onActiveStopChange={setActiveStopId}

@@ -1,4 +1,4 @@
-import type { AddStopInput, BatchSummary, CustomerListItem, CustomerUploadSummary, ManualOrderInput, OrderSelectionInput, RoutePlan } from "@shared/types";
+import type { AddStopInput, BatchSummary, CustomerListItem, CustomerUploadSummary, ManualOrderInput, OrderSelectionInput, RoutePlan, TerritoryCycle } from "@shared/types";
 
 const API = import.meta.env.VITE_API_URL ?? "/api";
 
@@ -50,13 +50,21 @@ export async function fetchTerritories(): Promise<{ territoryId: string; name: s
   return res.json();
 }
 
-export async function addManualOrder(input: ManualOrderInput): Promise<CustomerUploadSummary> {
+export async function fetchTerritoryCycles(): Promise<TerritoryCycle[]> {
+  const res = await fetch(`${API}/territories/cycles`);
+  if (!res.ok) throw new Error("Failed to load delivery cycles");
+  return res.json();
+}
+
+export async function addManualOrder(
+  input: ManualOrderInput
+): Promise<CustomerUploadSummary & { plan?: RoutePlan }> {
   const res = await fetch(`${API}/customers/manual`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(input),
   });
-  const data = (await res.json()) as CustomerUploadSummary;
+  const data = (await res.json()) as CustomerUploadSummary & { plan?: RoutePlan };
   if (!res.ok && data.errors?.length) return data;
   if (!res.ok) throw new Error("Failed to add manual order");
   return data;
@@ -385,6 +393,39 @@ import type {
 export type { RouteLegInfo, SegmentTrafficAlert, TrafficDelayLevel };
 export type RouteGeometrySegment = SegmentGeometry;
 export type RouteGeometryResponse = RouteGeometryResult;
+
+export async function applyRollingTraffic(
+  cycleId: string,
+  segments: { segmentId: string; stops: { stopId: string; position: number }[] }[]
+): Promise<RoutePlan> {
+  const body = JSON.stringify({ segments });
+
+  let res = await fetch(`${API}/routes/${encodeURIComponent(cycleId)}/apply-traffic`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body,
+  });
+
+  if (res.status === 404) {
+    res = await fetch(`${API}/routes/${encodeURIComponent(cycleId)}/segments`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ segments, applyRollingTraffic: true }),
+    });
+  }
+
+  if (!res.ok) {
+    const data = (await res.json().catch(() => ({}))) as { error?: string };
+    if (res.status === 404) {
+      throw new Error(
+        data.error ??
+          "Traffic refresh API not found — restart the routing dev server (npm run dev) and try again."
+      );
+    }
+    throw new Error(data.error ?? `Failed to refresh traffic (${res.status})`);
+  }
+  return res.json();
+}
 
 export async function fetchRouteGeometry(
   cycleId: string,

@@ -23,6 +23,12 @@ interface RouteMapProps {
   trafficSummary?: RouteGeometryResult["trafficSummary"];
   geometrySource?: "google" | "estimated" | null;
   geometryLoading?: boolean;
+  trafficRefreshPending?: boolean;
+  refreshingTraffic?: boolean;
+  trafficRefreshError?: string | null;
+  onRefreshTraffic?: () => void;
+  pendingRouteOrder?: boolean;
+  routeLocked?: boolean;
 }
 
 function depotIcon(): L.DivIcon {
@@ -81,6 +87,12 @@ export default function RouteMap({
   geometryPaths,
   geometrySource,
   geometryLoading,
+  trafficRefreshPending,
+  refreshingTraffic,
+  trafficRefreshError,
+  onRefreshTraffic,
+  pendingRouteOrder,
+  routeLocked,
 }: RouteMapProps) {
   const [viewMode, setViewMode] = useState<TrafficMapMode>("traffic");
   const [focusPoints, setFocusPoints] = useState<[number, number][] | null>(null);
@@ -520,6 +532,35 @@ export default function RouteMap({
         )}
         {geometryLoading && (
           <span className="route-map__legend-loading">Updating traffic data…</span>
+        )}
+        {onRefreshTraffic && plan.travelTimeSource === "google" && (
+          <div className="route-map__traffic-refresh">
+            {trafficRefreshPending && !geometrySource && (
+              <span className="route-map__legend-traffic route-map__legend-traffic--stale">
+                Live traffic not loaded — map uses straight-line paths until you refresh.
+              </span>
+            )}
+            <button
+              type="button"
+              className="route-map-btn route-map-btn--traffic"
+              disabled={
+                routeLocked || pendingRouteOrder || refreshingTraffic || geometryLoading
+              }
+              title={
+                pendingRouteOrder
+                  ? "Apply stop order changes before refreshing traffic"
+                  : "Fetch live Google traffic for ETAs and road paths"
+              }
+              onClick={onRefreshTraffic}
+            >
+              {refreshingTraffic || geometryLoading ? "Refreshing traffic…" : "Refresh traffic & map"}
+            </button>
+            {trafficRefreshError && (
+              <span className="route-map__legend-traffic route-map__legend-traffic--error">
+                {trafficRefreshError}
+              </span>
+            )}
+          </div>
         )}
 
         {/* Segment / Truck Labels */}

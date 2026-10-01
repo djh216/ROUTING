@@ -64,3 +64,10 @@ export function applySegmentUpdates(plan: RoutePlan, updates: SegmentUpdate[]): 
     }),
   };
 }
+
+export function segmentUpdatesFromPlan(plan: RoutePlan): SegmentUpdate[] {
+  return plan.segments.map((seg) => ({
+    segmentId: seg.id,
+    stops: seg.stops.map((s, position) => ({ stopId: s.stopId, position })),
+  }));
+}

@@ -903,6 +903,41 @@ body {
   border-color: var(--muted);
 }
 
+.route-map__traffic-refresh {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  margin-top: 0.35rem;
+  max-width: 16rem;
+}
+
+.route-map-btn--traffic {
+  background: var(--accent);
+  color: #fff;
+  align-self: flex-start;
+}
+
+.route-map-btn--traffic:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+
+.route-map-btn--traffic:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.route-map__legend-traffic--stale {
+  font-size: 0.72rem;
+  line-height: 1.35;
+  color: var(--muted);
+}
+
+.route-map__legend-traffic--error {
+  font-size: 0.72rem;
+  line-height: 1.35;
+  color: #dc2626;
+}
+
 .route-map-btn-link {
   background: none;
   border: none;
@@ -1262,6 +1297,23 @@ body {
   background: rgba(239, 68, 68, 0.15);
   border: 1px solid var(--error);
   color: #fca5a5;
+}
+
+.route-board__banner--pending {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  background: rgba(245, 158, 11, 0.12);
+  border: 1px solid rgba(245, 158, 11, 0.45);
+  color: var(--text);
+}
+
+.route-board__pending-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
 }
 
 .route-board__columns {

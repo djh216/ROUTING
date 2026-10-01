@@ -32,6 +32,10 @@ import RoutePrintModal from "./RoutePrintModal";
 
 interface RouteBoardProps {
   plan: RoutePlan;
+  pendingRouteOrder?: boolean;
+  applyingRouteOrder?: boolean;
+  onApplyRouteOrder?: () => void;
+  onDiscardRouteOrder?: () => void;
   onUpdate: (segments: SegmentUpdate[]) => void;
   onPreviewSegments?: (segments: SegmentUpdate[] | null) => void;
   onActiveStopChange?: (stopId: string | null) => void;
@@ -1311,6 +1315,10 @@ function SegmentColumn({
 
 export default function RouteBoard({
   plan,
+  pendingRouteOrder,
+  applyingRouteOrder,
+  onApplyRouteOrder,
+  onDiscardRouteOrder,
   onUpdate,
   onPreviewSegments,
   onActiveStopChange,
@@ -1466,7 +1474,8 @@ export default function RouteBoard({
 
   const canReoptimize =
     plan.segments.some((s) => s.stops.length >= 2) &&
-    !isLocked;
+    !isLocked &&
+    !pendingRouteOrder;
 
   const totalRouteMinutes =
     plan.totalRouteMinutes ??
@@ -1541,6 +1550,35 @@ export default function RouteBoard({
 
   return (
     <div className="route-board">
+      {pendingRouteOrder && !isLocked && onApplyRouteOrder && (
+        <div className="route-board__banner route-board__banner--pending">
+          <span>
+            Stop order changed locally. ETAs and drive times still reflect the last saved route until
+            you update. Live traffic and the road map are unchanged until you refresh them separately.
+          </span>
+          <div className="route-board__pending-actions">
+            <button
+              type="button"
+              className="btn btn--primary btn--compact"
+              disabled={applyingRouteOrder}
+              onClick={onApplyRouteOrder}
+            >
+              {applyingRouteOrder ? "Updating…" : "Update route times"}
+            </button>
+            {onDiscardRouteOrder && (
+              <button
+                type="button"
+                className="btn btn--secondary btn--compact"
+                disabled={applyingRouteOrder}
+                onClick={onDiscardRouteOrder}
+              >
+                Discard order changes
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
       <div className="route-board__toolbar">
         {isMultiDay && onWedThresholdChange && !isLocked && (
           <label className="wed-slider">
@@ -1550,6 +1588,7 @@ export default function RouteBoard({
               min={0}
               max={plan.allStops.length}
               value={wedCount}
+              disabled={pendingRouteOrder}
               onChange={(e) => onWedThresholdChange(Number(e.target.value))}
             />
             <strong>{wedCount}</strong>
@@ -1562,7 +1601,7 @@ export default function RouteBoard({
           <button
             type="button"
             className="btn btn--secondary"
-            disabled={swappingSegments}
+            disabled={swappingSegments || pendingRouteOrder}
             onClick={() => void handleSwapDays()}
             title={
               plan.segments.length === 2
@@ -1634,6 +1673,11 @@ export default function RouteBoard({
             cycleId={plan.cycleId}
             territoryId={plan.territoryId}
             territoryName={plan.territoryName}
+            segments={plan.segments.map((segment) => ({
+              id: segment.id,
+              label: segment.label,
+            }))}
+            segmentKind={isMultiDay ? "day" : "truck"}
             disabled={isLocked}
             onAdded={onStopAdded}
           />
@@ -1764,7 +1808,7 @@ export default function RouteBoard({
                     : undefined
                 }
                 onReoptimize={
-                  onReoptimizeSegment
+                  onReoptimizeSegment && !pendingRouteOrder
                     ? () => void handleReoptimizeSegment(segment.id)
                     : undefined
                 }
@@ -1780,7 +1824,11 @@ export default function RouteBoard({
                   flippingSegmentId === segment.id || flippingAll
                 }
                 onSwapWithOther={
-                  isMultiDay && onSwapSegments && !isLocked && plan.segments.length >= 2
+                  isMultiDay &&
+                  onSwapSegments &&
+                  !isLocked &&
+                  !pendingRouteOrder &&
+                  plan.segments.length >= 2
                     ? (targetId) =>
                         void handleSwapDays(segment.id, targetId ?? otherSegment?.id)
                     : undefined

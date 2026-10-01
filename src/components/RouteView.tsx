@@ -9,6 +9,10 @@ interface RouteViewProps {
   plan: RoutePlan;
   previewSegments: SegmentUpdate[] | null;
   activeStopId: string | null;
+  pendingRouteOrder?: boolean;
+  applyingRouteOrder?: boolean;
+  onApplyRouteOrder?: () => void;
+  onDiscardRouteOrder?: () => void;
   onUpdate: (segments: SegmentUpdate[]) => void;
   onPreviewSegments: (segments: SegmentUpdate[] | null) => void;
   onActiveStopChange: (stopId: string | null) => void;
@@ -40,6 +44,10 @@ interface RouteViewProps {
   onDeliveryInstructionsChange?: (stopId: string, instructions: string) => void;
   onContactChange?: (stopId: string, contactName: string, contactPhone: string) => void;
   mapGeometryRefreshKey: number;
+  trafficRefreshPending?: boolean;
+  refreshingTraffic?: boolean;
+  trafficRefreshError?: string | null;
+  onRefreshTraffic?: () => void;
 }
 
 export default function RouteView({
@@ -47,6 +55,10 @@ export default function RouteView({
   plan,
   previewSegments,
   activeStopId,
+  pendingRouteOrder,
+  applyingRouteOrder,
+  onApplyRouteOrder,
+  onDiscardRouteOrder,
   onUpdate,
   onPreviewSegments,
   onActiveStopChange,
@@ -70,12 +82,15 @@ export default function RouteView({
   onDeliveryInstructionsChange,
   onContactChange,
   mapGeometryRefreshKey,
+  trafficRefreshPending,
+  refreshingTraffic,
+  trafficRefreshError,
+  onRefreshTraffic,
 }: RouteViewProps) {
-  const mapPreviewSegments = plan.manualTruckAssignment ? null : previewSegments;
   const { geometrySegments, geometryPaths, trafficSummary, geometrySource, loading: geometryLoading } = useRouteGeometry(
     cycleId,
     plan,
-    mapPreviewSegments,
+    null,
     mapGeometryRefreshKey
   );
 
@@ -83,16 +98,26 @@ export default function RouteView({
     <div className="main__route-view">
       <RouteMap
         plan={plan}
-        previewSegments={mapPreviewSegments}
+        previewSegments={previewSegments}
         activeStopId={activeStopId}
         geometrySegments={geometrySegments}
         geometryPaths={geometryPaths}
         trafficSummary={trafficSummary}
         geometrySource={geometrySource}
         geometryLoading={geometryLoading}
+        trafficRefreshPending={trafficRefreshPending}
+        refreshingTraffic={refreshingTraffic}
+        trafficRefreshError={trafficRefreshError}
+        onRefreshTraffic={onRefreshTraffic}
+        pendingRouteOrder={pendingRouteOrder}
+        routeLocked={plan.status === "locked"}
       />
       <RouteBoard
         plan={plan}
+        pendingRouteOrder={pendingRouteOrder}
+        applyingRouteOrder={applyingRouteOrder}
+        onApplyRouteOrder={onApplyRouteOrder}
+        onDiscardRouteOrder={onDiscardRouteOrder}
         onUpdate={onUpdate}
         onPreviewSegments={onPreviewSegments}
         onActiveStopChange={onActiveStopChange}

@@ -3,6 +3,7 @@ import { seedCustomerStoreForTests } from "../data/customer-store.js";
 import { TERRITORY_CYCLES } from "../data/territories.js";
 import {
   appendDaySegment,
+  appendStopToSegment,
   applySegmentStops,
   assignStopToDay,
   assignStopToTruck,
@@ -608,4 +609,47 @@ assert(
   "Re-optimized Vetri should arrive at 9:30 AM"
 );
 console.log("All Vetri first-stop tests passed.");
+
+const extraStop = {
+  id: "stop-extra-pittsburgh",
+  customerId: "extra-pittsburgh",
+  customerName: "Extra Pittsburgh Stop",
+  address: "1 Penn Ave",
+  city: "Pittsburgh",
+  territoryId: "pittsburgh",
+  cycleId: "pittsburgh",
+  cases: 3,
+  lat: 40.44,
+  lng: -79.99,
+  orderIds: ["ox"],
+  contactName: "Alex",
+  contactPhone: "412-555-0199",
+  deliveryInstructions: "",
+};
+const wedOrder = pittsburgh.segments[0].stops.map((s) => s.stopId).join(",");
+const thuOrder = pittsburgh.segments[1].stops.map((s) => s.stopId).join(",");
+const extraMatrix = createEstimatedTravelMatrix(SCRANTON_DEPOT, [
+  ...pittsburgh.allStops,
+  extraStop,
+]);
+const { plan: withExtra } = await appendStopToSegment(
+  pittsburgh,
+  extraStop,
+  pittsburgh.segments[1].id,
+  extraMatrix
+);
+assert(
+  withExtra.segments[0].stops.map((s) => s.stopId).join(",") === wedOrder,
+  "Adding a stop to Thursday should leave Wednesday's order unchanged"
+);
+const expectedThu = thuOrder ? `${thuOrder},${extraStop.id}` : extraStop.id;
+assert(
+  withExtra.segments[1].stops.map((s) => s.stopId).join(",") === expectedThu,
+  "The new stop should be appended to Thursday without reordering that day"
+);
+assert(
+  Boolean(withExtra.segments[1].validation.stopEtas[extraStop.id]),
+  "The appended stop should receive an ETA"
+);
+console.log("All append-stop tests passed.");
 

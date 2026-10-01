@@ -6,6 +6,9 @@ interface AddStopPanelProps {
   cycleId: string;
   territoryId: string;
   territoryName: string;
+  /** Set when the built route has more than one day or truck. */
+  segments?: { id: string; label: string }[];
+  segmentKind?: "day" | "truck";
   disabled?: boolean;
   onAdded: (plan: RoutePlan) => void;
 }
@@ -25,6 +28,8 @@ export default function AddStopPanel({
   cycleId,
   territoryId,
   territoryName,
+  segments,
+  segmentKind = "truck",
   disabled,
   onAdded,
 }: AddStopPanelProps) {
@@ -36,9 +41,12 @@ export default function AddStopPanel({
     ...EMPTY_FORM,
     territoryId,
   });
+  const [segmentId, setSegmentId] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [warnings, setWarnings] = useState<string[]>([]);
+  const chooseSegment = (segments?.length ?? 0) > 1;
+  const defaultSegmentId = segments?.[0]?.id ?? "";
 
   const loadAvailable = useCallback(() => {
     fetchAvailableCustomersForRoute(cycleId)
@@ -55,9 +63,10 @@ export default function AddStopPanel({
   useEffect(() => {
     if (open) {
       setForm({ ...EMPTY_FORM, territoryId });
+      setSegmentId(defaultSegmentId);
       loadAvailable();
     }
-  }, [open, territoryId, loadAvailable]);
+  }, [open, territoryId, loadAvailable, defaultSegmentId]);
 
   function updateField<K extends keyof ManualOrderInput>(key: K, value: ManualOrderInput[K]) {
     setForm((prev) => ({ ...prev, [key]: value }));
@@ -70,10 +79,16 @@ export default function AddStopPanel({
     setError(null);
     setWarnings([]);
     try {
+      if (chooseSegment && !segmentId) {
+        setError(segmentKind === "day" ? "Choose a day" : "Choose a truck");
+        return;
+      }
+
+      const placement = segmentId ? { segmentId } : {};
       const input =
         mode === "existing"
-          ? { customerId: selectedCustomerId }
-          : { ...form, territoryId };
+          ? { customerId: selectedCustomerId, ...placement }
+          : { ...form, territoryId, ...placement };
 
       if (mode === "existing" && !selectedCustomerId) {
         setError("Select an account to add");
@@ -217,12 +232,31 @@ export default function AddStopPanel({
             </>
           )}
 
+          {chooseSegment && (
+            <label className="add-stop-panel__field">
+              {segmentKind === "day" ? "Add to day" : "Add to truck"}
+              <select
+                required
+                value={segmentId}
+                onChange={(e) => setSegmentId(e.target.value)}
+              >
+                {segments?.map((segment) => (
+                  <option key={segment.id} value={segment.id}>
+                    {segment.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+
           <p className="add-stop-panel__hint">
-            The route will be re-optimized with this stop included. Other territories are unchanged.
+            {chooseSegment
+              ? `The stop is added to the end of the selected ${segmentKind}. Stops already on the route stay in their current order.`
+              : "The stop is added at the end. Stops already on the route stay in their current order."}
           </p>
 
           <button type="submit" className="btn btn--primary" disabled={saving}>
-            {saving ? "Adding…" : "Add stop & re-optimize"}
+            {saving ? "Adding…" : "Add stop"}
           </button>
 
           {warnings.map((w) => (

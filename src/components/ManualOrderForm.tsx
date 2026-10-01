@@ -1,9 +1,32 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
-import { addManualOrder, fetchTerritories } from "../lib/api";
-import type { ManualOrderInput } from "@shared/types";
+import { addManualOrder, fetchTerritories, fetchTerritoryCycles } from "../lib/api";
+import type { ManualOrderInput, RoutePlan, TerritoryCycle } from "@shared/types";
 
 interface ManualOrderFormProps {
-  onAdded: () => void;
+  activePlan?: RoutePlan | null;
+  onAdded: (plan?: RoutePlan) => void;
+}
+
+function cycleIdForTerritory(
+  cycles: TerritoryCycle[],
+  territoryId: string,
+  cycle?: number
+): string | null {
+  if (!territoryId) return null;
+  if (territoryId === "northern-philly") {
+    return cycles.find((item) => item.id === "thursday-sepa")?.id ?? null;
+  }
+  const matches = cycles.filter((item) =>
+    (item.territoryIds ?? [item.territoryId]).includes(territoryId)
+  );
+  if (territoryId === "philadelphia" && cycle === 2) {
+    return matches.find((item) => item.id === "thursday-sepa")?.id ?? null;
+  }
+  if (cycle != null) {
+    const byNumber = matches.find((item) => item.cycle === cycle);
+    if (byNumber) return byNumber.id;
+  }
+  return matches[0]?.id ?? null;
 }
 
 const EMPTY_FORM: ManualOrderInput = {
@@ -17,23 +40,56 @@ const EMPTY_FORM: ManualOrderInput = {
   cycle: 1,
 };
 
-export default function ManualOrderForm({ onAdded }: ManualOrderFormProps) {
+export default function ManualOrderForm({ activePlan, onAdded }: ManualOrderFormProps) {
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState<ManualOrderInput>(EMPTY_FORM);
   const [territories, setTerritories] = useState<{ territoryId: string; name: string }[]>([]);
+  const [cycles, setCycles] = useState<TerritoryCycle[]>([]);
+  const [segmentId, setSegmentId] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [warnings, setWarnings] = useState<string[]>([]);
 
   const loadTerritories = useCallback(() => {
-    fetchTerritories()
-      .then(setTerritories)
+    Promise.all([fetchTerritories(), fetchTerritoryCycles()])
+      .then(([territoryList, cycleList]) => {
+        setTerritories(territoryList);
+        setCycles(cycleList);
+      })
       .catch(() => setError("Could not load territories"));
   }, []);
 
   useEffect(() => {
     if (open) loadTerritories();
   }, [open, loadTerritories]);
+
+  const targetCycleId = cycleIdForTerritory(
+    cycles,
+    form.territoryId,
+    form.territoryId === "philadelphia" ? (form.cycle ?? 1) : undefined
+  );
+  const matchesBuiltRoute =
+    activePlan != null &&
+    activePlan.segments.length > 0 &&
+    activePlan.cycleId === targetCycleId;
+  const placementSegments = matchesBuiltRoute && activePlan.segments.length > 1 ? activePlan.segments : [];
+  const chooseSegment = placementSegments.length > 1;
+  const placementKey = placementSegments.map((segment) => segment.id).join("|");
+  const segmentKind = placementSegments.some((segment) => segment.segmentType === "day")
+    ? "day"
+    : "truck";
+  const routeLocked = matchesBuiltRoute && activePlan?.status === "locked";
+  const appendSegmentId = matchesBuiltRoute
+    ? chooseSegment
+      ? segmentId
+      : activePlan.segments[0].id
+    : undefined;
+
+  useEffect(() => {
+    if (!chooseSegment) return;
+    const ids = placementKey.split("|").filter(Boolean);
+    setSegmentId((current) => (ids.includes(current) ? current : (ids[0] ?? "")));
+  }, [chooseSegment, placementKey]);
 
   function updateField<K extends keyof ManualOrderInput>(key: K, value: ManualOrderInput[K]) {
     setForm((prev) => ({ ...prev, [key]: value }));
@@ -46,9 +102,14 @@ export default function ManualOrderForm({ onAdded }: ManualOrderFormProps) {
     setError(null);
     setWarnings([]);
     try {
+      if (chooseSegment && !segmentId) {
+        setError(segmentKind === "day" ? "Choose a day" : "Choose a truck");
+        return;
+      }
       const payload: ManualOrderInput = {
         ...form,
         cycle: form.territoryId === "philadelphia" ? (form.cycle ?? 1) : undefined,
+        segmentId: appendSegmentId,
       };
       const result = await addManualOrder(payload);
       if (result.errors.length > 0) {
@@ -58,7 +119,7 @@ export default function ManualOrderForm({ onAdded }: ManualOrderFormProps) {
       setWarnings(result.warnings ?? []);
       setForm(EMPTY_FORM);
       setOpen(false);
-      onAdded();
+      onAdded(result.plan);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to add order");
     } finally {
@@ -169,9 +230,41 @@ export default function ManualOrderForm({ onAdded }: ManualOrderFormProps) {
             </label>
           )}
 
+          {chooseSegment && (
+            <label className="manual-order__field">
+              {segmentKind === "day" ? "Add to day" : "Add to truck"}
+              <select
+                required
+                value={segmentId}
+                onChange={(e) => setSegmentId(e.target.value)}
+                disabled={routeLocked}
+              >
+                {placementSegments.map((segment) => (
+                  <option key={segment.id} value={segment.id}>
+                    {segment.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+
+          {matchesBuiltRoute && (
+            <p className="manual-order__warn">
+              {routeLocked
+                ? "Unlock the route before adding an order."
+                : chooseSegment
+                  ? `The order is added to the end of the selected ${segmentKind}. Stops already on the route stay in their current order.`
+                  : "The order is added at the end. Stops already on the route stay in their current order."}
+            </p>
+          )}
+
           <div className="manual-order__actions">
-            <button type="submit" className="btn btn--primary btn--block" disabled={saving}>
-              {saving ? "Adding…" : "Add order & build route"}
+            <button
+              type="submit"
+              className="btn btn--primary btn--block"
+              disabled={saving || routeLocked}
+            >
+              {saving ? "Adding…" : matchesBuiltRoute ? "Add order" : "Add order & build route"}
             </button>
             <button
               type="button"

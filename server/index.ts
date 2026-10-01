@@ -4,7 +4,7 @@ import cors from "cors";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
-import { TERRITORY_CYCLES } from "./data/territories.js";
+import { TERRITORY_CYCLES, resolveCycleId, resolveTerritoryInput } from "./data/territories.js";
 import {
   applyOrderSelection,
   addManualOrder,
@@ -24,14 +24,17 @@ import {
 import { uniqueTerritories } from "./data/territories.js";
 import {
   applySegmentStops,
+  appendStopToSegment,
   appendDaySegment,
   appendTruckSegment,
   assignStopToDay,
   assignStopToTruck,
   buildRoutePlan,
+  ordersToStops,
   flipSegmentStops,
   reorderStopInSegment,
   reoptimizeSegments,
+  refreshPlanRollingTraffic,
   setDriveMinuteOverride,
   setDriverBreak,
   setFirstStopTimeOverride,
@@ -46,15 +49,17 @@ import {
   isOrderEligible,
 } from "./routing/scheduling.js";
 import {
+  buildTravelMatrix,
   clearTravelTimeCache,
   createEstimatedTravelMatrix,
+  deliveryDepartureTimestamp,
   type TravelMatrix,
 } from "./routing/travel-time.js";
 import {
   getGoogleMapsStatus,
   probeGoogleMapsAvailability,
 } from "./routing/google-maps-status.js";
-import type { ManualOrderInput, OrderSelectionInput, RoutePlan, StopAssignment } from "../shared/types.js";
+import type { ManualOrderInput, OrderSelectionInput, RoutePlan, Stop, StopAssignment } from "../shared/types.js";
 import { SCRANTON_DEPOT } from "../shared/constants.js";
 
 const app = express();
@@ -96,6 +101,52 @@ async function buildAndCachePlan(cycleId: string): Promise<RoutePlan> {
   const { plan, matrix } = await buildRoutePlan(cycleId, getOrders(), REFERENCE_DATE);
   routePlans.set(cycleId, plan);
   travelMatrices.set(cycleId, matrix);
+  return plan;
+}
+
+function placementSegments(plan: RoutePlan): { id: string; label: string }[] {
+  return plan.segments.map((segment) => ({ id: segment.id, label: segment.label }));
+}
+
+function resolveManualCycleId(input: { territoryId?: string; cycle?: number }): string | null {
+  const territoryId = resolveTerritoryInput(input.territoryId ?? "");
+  if (!territoryId) return null;
+  try {
+    return resolveCycleId(territoryId, input.cycle ?? 1);
+  } catch {
+    return null;
+  }
+}
+
+function findAddedStop(plan: RoutePlan, cycleId: string): Stop {
+  const onPlan = new Set(plan.allStops.map((stop) => stop.customerId));
+  const added = ordersToStops(getOrders().filter((order) => order.cycleId === cycleId)).filter(
+    (stop) => !onPlan.has(stop.customerId)
+  );
+  if (added.length !== 1) {
+    throw new Error("Could not identify the new stop");
+  }
+  return added[0];
+}
+
+/** One segment needs no choice. Several segments require an explicit day or truck. */
+function segmentIdForAppend(plan: RoutePlan, requested?: string): string | null {
+  if (plan.segments.length === 1) return plan.segments[0].id;
+  if (requested && plan.segments.some((segment) => segment.id === requested)) return requested;
+  return null;
+}
+
+/** Keep the current stop order and append one new stop to the chosen day or truck. */
+async function appendStopToCachedPlan(cycleId: string, segmentId: string): Promise<RoutePlan> {
+  const existing = routePlans.get(cycleId);
+  if (!existing) throw new Error("Reload the route, then add the stop again");
+  const stop = findAddedStop(existing, cycleId);
+  const matrix = await buildTravelMatrix(SCRANTON_DEPOT, [...existing.allStops, stop], {
+    departureTime: deliveryDepartureTimestamp(existing.deliveryDate),
+  });
+  const { plan, matrix: nextMatrix } = await appendStopToSegment(existing, stop, segmentId, matrix);
+  routePlans.set(cycleId, plan);
+  travelMatrices.set(cycleId, nextMatrix);
   return plan;
 }
 
@@ -171,9 +222,48 @@ app.post("/api/customers/regeocode", async (_req, res) => {
 app.post("/api/customers/manual", async (req, res) => {
   const input = req.body as ManualOrderInput;
   try {
+    const cycleId = resolveManualCycleId(input);
+    const existing = cycleId ? routePlans.get(cycleId) : undefined;
+    const appendSegmentId = existing ? segmentIdForAppend(existing, input.segmentId) : null;
+    if (existing) {
+      if (existing.status === "locked") {
+        res.status(400).json({
+          uploadedAt: new Date().toISOString(),
+          customerCount: 0,
+          orderCount: 0,
+          errors: ["Unlock the route before adding an order"],
+          warnings: [],
+          segments: placementSegments(existing),
+        });
+        return;
+      }
+      if (!appendSegmentId) {
+        res.status(400).json({
+          uploadedAt: new Date().toISOString(),
+          customerCount: 0,
+          orderCount: 0,
+          errors: ["Choose which day or truck to add this order to"],
+          warnings: [],
+          segments: placementSegments(existing),
+        });
+        return;
+      }
+    }
+
     const summary = await addManualOrder(input, REFERENCE_DATE);
-    if (summary.errors.length === 0) clearRoutePlans();
-    res.status(summary.errors.length > 0 ? 400 : 200).json(summary);
+    if (summary.errors.length > 0) {
+      res.status(400).json(summary);
+      return;
+    }
+
+    if (existing && appendSegmentId && cycleId) {
+      const plan = await appendStopToCachedPlan(cycleId, appendSegmentId);
+      res.json({ ...summary, plan });
+      return;
+    }
+
+    if (cycleId) invalidateRoutePlan(cycleId);
+    res.json(summary);
   } catch (e) {
     res.status(500).json({
       uploadedAt: new Date().toISOString(),
@@ -214,13 +304,58 @@ app.get("/api/routes/:cycleId/available-customers", (req, res) => {
 
 app.post("/api/routes/:cycleId/add-stop", async (req, res) => {
   try {
-    const result = await addStopToRoute(req.params.cycleId, req.body, REFERENCE_DATE);
+    const cycleId = req.params.cycleId;
+    const segmentId = (req.body as { segmentId?: string }).segmentId;
+    const existing = routePlans.get(cycleId);
+    const appendSegmentId = existing ? segmentIdForAppend(existing, segmentId) : null;
+
+    if (existing) {
+      if (existing.status === "locked") {
+        res.status(400).json({
+          summary: {
+            uploadedAt: new Date().toISOString(),
+            customerCount: 0,
+            orderCount: 0,
+            errors: ["Unlock the route before adding a stop"],
+            warnings: [],
+          },
+          errors: ["Unlock the route before adding a stop"],
+          warnings: [],
+          segments: placementSegments(existing),
+        });
+        return;
+      }
+      if (!appendSegmentId) {
+        res.status(400).json({
+          summary: {
+            uploadedAt: new Date().toISOString(),
+            customerCount: 0,
+            orderCount: 0,
+            errors: ["Choose which day or truck to add this stop to"],
+            warnings: [],
+          },
+          errors: ["Choose which day or truck to add this stop to"],
+          warnings: [],
+          segments: placementSegments(existing),
+        });
+        return;
+      }
+    }
+
+    const result = await addStopToRoute(cycleId, req.body, REFERENCE_DATE);
     if (result.errors.length > 0) {
       res.status(400).json(result);
       return;
     }
-    invalidateRoutePlan(req.params.cycleId);
-    const plan = await buildAndCachePlan(req.params.cycleId);
+
+    if (existing && appendSegmentId) {
+      const plan = await appendStopToCachedPlan(cycleId, appendSegmentId);
+      res.json({ ...result, plan });
+      return;
+    }
+
+    invalidateRoutePlan(cycleId);
+    const plan = await buildAndCachePlan(cycleId);
     res.json({ ...result, plan });
   } catch (e) {
     res.status(500).json({
@@ -272,8 +407,15 @@ app.post("/api/routes/:cycleId/segments", async (req, res) => {
   try {
     const plan = await getOrCreatePlan(req.params.cycleId);
     const matrix = getMatrixForCycle(req.params.cycleId, plan);
-    const { segments } = req.body as { segments: { segmentId: string; stops: StopAssignment[] }[] };
-    const updated = await applySegmentStops(plan, segments, matrix);
+    const { segments, applyRollingTraffic: withTraffic } = req.body as {
+      segments: { segmentId: string; stops: StopAssignment[] }[];
+      applyRollingTraffic?: boolean;
+    };
+    let updated = await applySegmentStops(plan, segments, matrix);
+    if (withTraffic) {
+      updated = await refreshPlanRollingTraffic(updated, matrix);
+      clearRouteGeometryCache();
+    }
     routePlans.set(req.params.cycleId, updated);
     res.json(updated);
   } catch (e) {
@@ -685,6 +827,29 @@ app.post("/api/routes/:cycleId/reset", async (req, res) => {
     res.json(plan);
   } catch (e) {
     res.status(500).json({ error: e instanceof Error ? e.message : "Failed to reset route" });
+  }
+});
+
+app.post("/api/routes/:cycleId/apply-traffic", async (req, res) => {
+  try {
+    let plan = await getOrCreatePlan(req.params.cycleId);
+    if (plan.status === "locked") {
+      res.status(400).json({ error: "Route is locked" });
+      return;
+    }
+    const matrix = getMatrixForCycle(req.params.cycleId, plan);
+    const { segments } = req.body as {
+      segments?: { segmentId: string; stops: StopAssignment[] }[];
+    };
+    if (segments?.length) {
+      plan = await applySegmentStops(plan, segments, matrix);
+    }
+    const updated = await refreshPlanRollingTraffic(plan, matrix);
+    routePlans.set(req.params.cycleId, updated);
+    clearRouteGeometryCache();
+    res.json(updated);
+  } catch (e) {
+    res.status(500).json({ error: e instanceof Error ? e.message : "Failed to apply traffic" });
   }
 });
 

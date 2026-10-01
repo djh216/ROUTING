@@ -95,12 +95,14 @@ export interface ManualOrderInput {
   territoryId: string;
   /** Philadelphia only: 1 = Wed run, 2 = Thu run */
   cycle?: number;
+  /** Existing multi-day or multi-truck segment to append this order to. */
+  segmentId?: string;
 }
 
 /** Add an existing account or new manual entry to a specific route cycle */
 export type AddStopInput =
   | ManualOrderInput
-  | { customerId: string };
+  | { customerId: string; segmentId?: string };
 
 export interface AddStopResult {
   summary: CustomerUploadSummary;
