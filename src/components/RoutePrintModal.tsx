@@ -42,9 +42,10 @@ export default function RoutePrintModal({
       console.error("Failed to generate printable HTML:", e);
     }
 
-    // 2. Generate PDF blob on mount
     try {
-      const res = generateRoutePdf(plan, segment, stops, { autoDownload: true });
+      const res = generateRoutePdf(plan, segment, stops, {
+        autoDownload: true,
+      });
       setPdfBlobUrl(res.blobUrl);
       setDownloaded(true);
     } catch (err) {
@@ -157,19 +158,19 @@ export default function RoutePrintModal({
         </div>
 
         {printNotice === "print-opened" && (
-          <div className="route-print-modal__notice" style={{ background: "#ecfdf5", color: "#065f46", borderBottom: "1px solid #a7f3d0" }}>
+          <div className="route-print-modal__notice route-print-modal__notice--success">
             ✓ Print window opened in a new tab. If the print prompt didn&apos;t appear automatically, click &quot;Print Manifest&quot; in the new tab.
           </div>
         )}
 
         {printNotice === "popup-blocked" && (
-          <div className="route-print-modal__notice" style={{ background: "#fffbeb", color: "#92400e", borderBottom: "1px solid #fde68a" }}>
+          <div className="route-print-modal__notice route-print-modal__notice--warn">
             ⚠️ Pop-up window was blocked by your browser. Please{" "}
             <a
               href={printHtmlUrl ?? "#"}
               target="_blank"
               rel="noopener noreferrer"
-              style={{ fontWeight: 700, textDecoration: "underline", color: "#b45309" }}
+              className="route-print-modal__notice-link"
             >
               click here to open the printable sheet in a new tab ↗
             </a>
@@ -182,7 +183,7 @@ export default function RoutePrintModal({
               <h1>
                 F Magnotta Wines — Delivery Manifest
               </h1>
-              <h2 style={{ fontSize: "12pt", margin: "0.25rem 0", color: "#475569" }}>
+              <h2 className="route-print-sheet__segment-title">
                 {plan.territoryName} — {segment.label}
               </h2>
               <p className="route-print-sheet__meta">
@@ -199,7 +200,7 @@ export default function RoutePrintModal({
                 {v.totalRouteMinutes ? ` · Total time: ${formatDurationMinutes(v.totalRouteMinutes)}` : ""}
               </p>
               {breakAfterStop && (
-                <p className="route-print-segment__break" style={{ color: "#d97706", marginTop: "0.25rem" }}>
+                <p className="route-print-segment__break route-print-sheet__preview-break">
                   Driver break ({DRIVER_BREAK_MINUTES} min) after {breakAfterStop.customerName}
                 </p>
               )}

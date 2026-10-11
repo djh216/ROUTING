@@ -29,8 +29,9 @@ export default function OrderSelector({ onApplied, refreshKey = 0 }: OrderSelect
         setCustomers(list);
         const initial: SelectionState = {};
         for (const c of list) {
+          if (!c.hasOrder) continue;
           initial[c.id] = {
-            selected: c.hasOrder,
+            selected: true,
             cycle: c.cycle ?? 1,
           };
         }
@@ -43,13 +44,18 @@ export default function OrderSelector({ onApplied, refreshKey = 0 }: OrderSelect
     load();
   }, [load, refreshKey]);
 
+  const orderCustomers = useMemo(
+    () => customers.filter((c) => c.hasOrder),
+    [customers]
+  );
+
   const territories = useMemo(() => {
-    const names = [...new Set(customers.map((c) => c.territoryName))].sort();
+    const names = [...new Set(orderCustomers.map((c) => c.territoryName))].sort();
     return names;
-  }, [customers]);
+  }, [orderCustomers]);
 
   const filtered = useMemo(() => {
-    return customers.filter((c) => {
+    return orderCustomers.filter((c) => {
       if (territoryFilter !== "all" && c.territoryName !== territoryFilter) return false;
       if (!search.trim()) return true;
       const q = search.toLowerCase();
@@ -63,9 +69,11 @@ export default function OrderSelector({ onApplied, refreshKey = 0 }: OrderSelect
         c.territoryName.toLowerCase().includes(q)
       );
     });
-  }, [customers, territoryFilter, search]);
+  }, [orderCustomers, territoryFilter, search]);
 
-  const selectedCount = (Object.values(selection) as Array<SelectionState[string]>).filter((s) => s.selected).length;
+  const selectedCount = (Object.values(selection) as Array<SelectionState[string]>).filter(
+    (s) => s.selected
+  ).length;
 
   function toggle(id: string) {
     setSelection((prev) => ({
@@ -83,21 +91,6 @@ export default function OrderSelector({ onApplied, refreshKey = 0 }: OrderSelect
       ...prev,
       [id]: { ...prev[id], cycle },
     }));
-  }
-
-  function selectAll() {
-    setSelection((prev) => {
-      const next: SelectionState = { ...prev };
-      for (const c of customers) {
-        next[c.id] = {
-          ...next[c.id],
-          selected: true,
-          cycle: next[c.id]?.cycle ?? c.cycle ?? 1,
-        };
-      }
-      return next;
-    });
-    setError(null);
   }
 
   function unselectAll() {
@@ -140,7 +133,9 @@ export default function OrderSelector({ onApplied, refreshKey = 0 }: OrderSelect
     return (
       <section className="order-selector order-selector--empty">
         <h2>Orders this week</h2>
-        <p className="order-selector__hint">Upload a CSV above or add orders manually to select accounts.</p>
+        <p className="order-selector__hint">
+          Upload accounts on the Customer database page, or add a manual order below.
+        </p>
       </section>
     );
   }
@@ -150,6 +145,18 @@ export default function OrderSelector({ onApplied, refreshKey = 0 }: OrderSelect
       <section className="order-selector order-selector--empty">
         <h2>Orders this week</h2>
         <p className="order-selector__hint">No accounts found in the uploaded CSV.</p>
+      </section>
+    );
+  }
+
+  if (orderCustomers.length === 0) {
+    return (
+      <section className="order-selector order-selector--empty">
+        <h2>Orders this week</h2>
+        <p className="order-selector__hint">
+          No orders yet. Select accounts on the <strong>Customer database</strong> page and use{" "}
+          <strong>Add to orders this week</strong>, or add a manual order below.
+        </p>
       </section>
     );
   }
@@ -213,15 +220,10 @@ export default function OrderSelector({ onApplied, refreshKey = 0 }: OrderSelect
       </ul>
 
       <p className="order-selector__summary">
-        {selectedCount} of {customers.length} account{customers.length !== 1 ? "s" : ""} selected
-        {selectedCount < customers.length && (
-          <button type="button" className="order-selector__clear" onClick={selectAll}>
-            Select all
-          </button>
-        )}
+        {selectedCount} of {orderCustomers.length} on orders this week
         {selectedCount > 0 && (
           <button type="button" className="order-selector__clear" onClick={unselectAll}>
-            Unselect all
+            Remove all
           </button>
         )}
       </p>
@@ -233,10 +235,10 @@ export default function OrderSelector({ onApplied, refreshKey = 0 }: OrderSelect
         onClick={() => void handleApply()}
       >
         {saving
-          ? "Applying…"
+          ? "Saving…"
           : selectedCount === 0
-            ? "Clear orders & routes"
-            : "Apply orders & build routes"}
+            ? "Clear orders this week"
+            : "Save orders this week"}
       </button>
 
       {error && <p className="order-selector__error">{error}</p>}

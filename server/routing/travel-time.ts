@@ -370,6 +370,8 @@ export async function computeRollingSegmentDriveTimes(options: {
   returnToDepot: boolean;
   depot: GeoPoint;
   apiKey?: string;
+  /** Multi-day: driver already at the first stop after overnighting nearby. */
+  skipDriveToFirstStop?: boolean;
 }): Promise<RollingSegmentDriveResult> {
   const apiKey = options.apiKey ?? process.env.GOOGLE_MAPS_API_KEY;
   const stopDriveMinutes: Record<string, number> = {};
@@ -401,6 +403,22 @@ export async function computeRollingSegmentDriveTimes(options: {
 
     if (options.driveOverrides?.[stopId] != null) {
       drive = Math.max(0, options.driveOverrides[stopId]!);
+    } else if (i === 0 && options.skipDriveToFirstStop) {
+      drive = 0;
+      stopDriveMinutes[stopId] = 0;
+      const serviceMinutes =
+        options.serviceOverrides?.[stopId] != null
+          ? Math.max(SERVICE_MINUTES_PER_STOP, Math.round(options.serviceOverrides[stopId]!))
+          : SERVICE_MINUTES_PER_STOP;
+      leaveAtMinutes = firstArrival + serviceMinutes;
+      if (breakAfterIndex === 0) {
+        leaveAtMinutes += DRIVER_BREAK_MINUTES;
+      }
+      cur = to;
+      if (i < options.stopIds.length - 1 || options.returnToDepot) {
+        await sleep(ROLLING_REQUEST_DELAY_MS);
+      }
+      continue;
     } else {
       if (i === 0) {
         const estimate = options.fallbackMatrix.getDurationMinutes(cur, to);

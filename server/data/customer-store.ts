@@ -2,13 +2,14 @@ import type {
   AddStopInput,
   AddStopResult,
   Customer,
+  CustomerAccountUpdate,
   CustomerListItem,
   CustomerUploadSummary,
   ManualOrderInput,
   Order,
   OrderSelectionInput,
 } from "../../shared/types.js";
-import { parseCustomersCsv } from "./csv-parser.js";
+import { parseContactEmailField, parseCustomersCsv } from "./csv-parser.js";
 import {
   cycleNumberFromId,
   getCycleById,
@@ -69,6 +70,98 @@ export function updateCustomerDeliveryInstructions(
   return customer;
 }
 
+function customerToListItem(c: Customer): CustomerListItem {
+  const orderByCustomer = new Map(orders.map((o) => [o.customerId, o]));
+  const existing = orderByCustomer.get(c.id);
+  const suggested = suggestedCases[c.id];
+  return {
+    ...c,
+    territoryName: getTerritoryDisplayName(c.territoryId),
+    hasOrder: !!existing,
+    cases: existing?.cases ?? suggested ?? 0,
+    cycle: existing ? cycleNumberFromId(existing.cycleId) : suggestedCycles[c.id],
+  };
+}
+
+export function getCustomerListItemById(customerId: string): CustomerListItem | null {
+  const customer = getCustomerById(customerId);
+  if (!customer) return null;
+  return customerToListItem(customer);
+}
+
+export async function updateCustomerAccount(
+  customerId: string,
+  input: CustomerAccountUpdate
+): Promise<{ customer: CustomerListItem | null; warnings: string[] }> {
+  const customer = getCustomerById(customerId);
+  if (!customer) return { customer: null, warnings: [] };
+
+  const warnings: string[] = [];
+  const prevAddress = customer.address;
+  const prevCity = customer.city;
+
+  if (input.name !== undefined) {
+    const name = input.name.trim();
+    if (!name) {
+      return { customer: null, warnings: ["Restaurant name is required"] };
+    }
+    customer.name = name;
+  }
+
+  if (input.address !== undefined) customer.address = input.address.trim();
+  if (input.city !== undefined) customer.city = input.city.trim();
+
+  if (input.contactName !== undefined || input.contactPhone !== undefined) {
+    updateCustomerContact(
+      customerId,
+      input.contactName ?? customer.contactName,
+      input.contactPhone ?? customer.contactPhone
+    );
+  }
+
+  if (input.contactEmail !== undefined) {
+    customer.contactEmail = parseContactEmailField(input.contactEmail);
+  }
+
+  if (input.deliveryInstructions !== undefined) {
+    customer.deliveryInstructions = input.deliveryInstructions.trim();
+  }
+
+  if (input.paymentMethod !== undefined) {
+    customer.paymentMethod = input.paymentMethod.trim();
+  }
+
+  if (input.teamMembers !== undefined) {
+    customer.teamMembers = input.teamMembers.trim();
+  }
+
+  if (input.outfieldLid !== undefined) {
+    customer.outfieldLid = input.outfieldLid.trim();
+  }
+
+  const addressChanged =
+    customer.address !== prevAddress || customer.city !== prevCity;
+  if (addressChanged && customer.address && customer.city) {
+    const { street, city, zip } = normalizeAddressFields(customer.address, customer.city);
+    customer.address = street;
+    customer.city = city;
+    const coords = await resolveCoordinates(
+      street,
+      city,
+      customer.territoryId,
+      customer.name,
+      zip
+    );
+    customer.lat = coords.lat;
+    customer.lng = coords.lng;
+    if (!coords.geocoded) {
+      warnings.push("Address updated but location is approximate");
+    }
+  }
+
+  return { customer: customerToListItem(customer), warnings };
+}
+
 export function getUploadSummary(): CustomerUploadSummary | null {
   return uploadSummary;
 }
@@ -82,23 +175,7 @@ export function getCustomerListItems(): CustomerListItem[] {
 
   const orderByCustomer = new Map(orders.map((o) => [o.customerId, o]));
 
-  return customers.map((c) => {
-    const existing = orderByCustomer.get(c.id);
-    const suggested = suggestedCases[c.id];
-    const hasOrder = !!existing;
-    const cases = existing?.cases ?? suggested ?? 0;
-    const cycle = existing
-      ? cycleNumberFromId(existing.cycleId)
-      : suggestedCycles[c.id];
-
-    return {
-      ...c,
-      territoryName: getTerritoryDisplayName(c.territoryId),
-      hasOrder,
-      cases,
-      cycle,
-    };
-  });
+  return customers.map((c) => customerToListItem(c));
 }
 
 export async function importWeeklyCustomersCsv(
@@ -391,6 +468,58 @@ export function applyOrderSelection(
     warnings: [],
     awaitingOrderSelection: false,
     fromCsvUpload: true,
+  };
+
+  return uploadSummary;
+}
+
+/** Append selected accounts to this week's orders without removing existing orders. */
+export function addOrderSelections(
+  selections: OrderSelectionInput[],
+  referenceDate: Date
+): CustomerUploadSummary {
+  const errors: string[] = [];
+  const warnings: string[] = [];
+  const existingIds = new Set(orders.map((o) => o.customerId));
+
+  for (const sel of selections) {
+    const customer = getCustomerById(sel.customerId);
+    if (!customer) {
+      errors.push(`Unknown customer: ${sel.customerId}`);
+      continue;
+    }
+    if (existingIds.has(sel.customerId)) {
+      warnings.push(`${customer.name} is already on orders this week`);
+      continue;
+    }
+    try {
+      const cycleId = resolveCycleId(customer.territoryId, sel.cycle ?? 1);
+      orders.push({
+        id: `order-${customer.id}-${orders.length}`,
+        customerId: customer.id,
+        territoryId: customer.territoryId,
+        cycleId,
+        cases: sel.cases ?? MIN_ORDER_CASES,
+        approvedAt: defaultApprovedAt(cycleId, referenceDate),
+        status: "approved",
+      });
+      existingIds.add(customer.id);
+    } catch {
+      errors.push(`Could not assign cycle for ${customer.name}`);
+    }
+  }
+
+  awaitingOrderSelection = false;
+
+  uploadSummary = {
+    uploadedAt: new Date().toISOString(),
+    customerCount: customers.length,
+    orderCount: orders.length,
+    filename: uploadSummary?.filename,
+    errors,
+    warnings,
+    awaitingOrderSelection: false,
+    fromCsvUpload: uploadSummary?.fromCsvUpload ?? fromCsvUpload,
   };
 
   return uploadSummary;

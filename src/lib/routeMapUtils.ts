@@ -17,15 +17,6 @@ export const SEGMENT_COLORS = [
   "#14b8a6",
 ];
 
-export const TRAFFIC_COLORS = {
-  normal: "#10b981",       // Fresh Emerald Green (Normal flow / < 3 min delay)
-  moderate: "#f59e0b",     // Amber / Orange (Moderate delay / 3-7 min delay)
-  significant: "#ef4444",  // Crimson Red (Significant delay / 8+ min delay)
-  significantHalo: "rgba(239, 68, 68, 0.4)", // Outer glow for severe delay
-};
-
-export type TrafficMapMode = "truck" | "traffic";
-
 export type LatLng = [number, number];
 
 export interface SegmentLegRoute {
@@ -50,21 +41,6 @@ export interface SegmentRoute {
   legs: SegmentLegRoute[];
   trafficAlert?: SegmentTrafficAlert;
   stops: { stop: Stop; sequence: number }[];
-}
-
-export function getLegColor(
-  delayLevel: TrafficDelayLevel,
-  mode: TrafficMapMode,
-  truckColor: string
-): string {
-  if (mode === "traffic") {
-    if (delayLevel === "significant") return TRAFFIC_COLORS.significant;
-    if (delayLevel === "moderate") return TRAFFIC_COLORS.moderate;
-    return TRAFFIC_COLORS.normal;
-  }
-  if (delayLevel === "significant") return TRAFFIC_COLORS.significant;
-  if (delayLevel === "moderate") return TRAFFIC_COLORS.moderate;
-  return truckColor;
 }
 
 function toTuple(path: { lat: number; lng: number }[]): LatLng[] {
@@ -115,13 +91,37 @@ export function buildSegmentRoutes(
         delayPercentage: l.delayPercentage,
       }));
     } else if (seg.waypoints.length >= 2) {
+      const startsAtDepot = segment.startLocation === "Scranton";
+      const legCount = seg.waypoints.length - 1;
       // Build default straight legs with validation traffic data
-      for (let i = 0; i < seg.waypoints.length - 1; i++) {
+      for (let i = 0; i < legCount; i++) {
         const fromP = seg.waypoints[i];
         const toP = seg.waypoints[i + 1];
-        let fromName = i === 0 ? "Scranton Depot" : stops[i - 1]?.customerName ?? `Stop ${i}`;
-        let toName = i < stops.length ? stops[i]?.customerName ?? `Stop ${i + 1}` : "Scranton Depot (Return)";
-        let toStopId = i < stops.length ? stops[i]?.id : undefined;
+        let fromName: string;
+        let toName: string;
+        let fromStopId: string | undefined;
+        let toStopId: string | undefined;
+
+        if (startsAtDepot && i === 0) {
+          fromName = "Scranton Depot";
+          toStopId = stops[0]?.id;
+          toName = stops[0]?.customerName ?? "Stop 1";
+        } else if (
+          segment.endLocation === "Scranton" &&
+          i === legCount - 1 &&
+          stops.length > 0
+        ) {
+          fromStopId = stops[stops.length - 1]?.id;
+          fromName = stops[stops.length - 1]?.customerName ?? "Last Stop";
+          toName = "Scranton Depot (Return)";
+        } else {
+          const fromIdx = startsAtDepot ? i - 1 : i;
+          const toIdx = startsAtDepot ? i : i + 1;
+          fromStopId = stops[fromIdx]?.id;
+          fromName = stops[fromIdx]?.customerName ?? `Stop ${fromIdx + 1}`;
+          toStopId = stops[toIdx]?.id;
+          toName = stops[toIdx]?.customerName ?? `Stop ${toIdx + 1}`;
+        }
 
         const scheduledDrive = toStopId
           ? segment.validation.stopDriveMinutes?.[toStopId]
@@ -147,7 +147,7 @@ export function buildSegmentRoutes(
           legIndex: i,
           fromName,
           toName,
-          fromStopId: i > 0 && i <= stops.length ? stops[i - 1]?.id : undefined,
+          fromStopId,
           toStopId,
           path: [[fromP.lat, fromP.lng], [toP.lat, toP.lng]],
           driveMinutes: driveM,

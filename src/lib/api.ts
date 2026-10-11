@@ -1,4 +1,14 @@
-import type { AddStopInput, BatchSummary, CustomerListItem, CustomerUploadSummary, ManualOrderInput, OrderSelectionInput, RoutePlan, TerritoryCycle } from "@shared/types";
+import type {
+  AddStopInput,
+  BatchSummary,
+  CustomerAccountUpdate,
+  CustomerListItem,
+  CustomerUploadSummary,
+  ManualOrderInput,
+  OrderSelectionInput,
+  RoutePlan,
+  TerritoryCycle,
+} from "@shared/types";
 
 const API = import.meta.env.VITE_API_URL ?? "/api";
 
@@ -44,6 +54,26 @@ export async function fetchCustomerList(): Promise<CustomerListItem[]> {
   return res.json();
 }
 
+export async function updateCustomerAccount(
+  customerId: string,
+  input: CustomerAccountUpdate
+): Promise<{ customer: CustomerListItem; warnings: string[] }> {
+  const res = await fetch(`${API}/customers/${encodeURIComponent(customerId)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  const data = (await res.json().catch(() => ({}))) as {
+    customer?: CustomerListItem;
+    warnings?: string[];
+    error?: string;
+  };
+  if (!res.ok || !data.customer) {
+    throw new Error(data.error ?? "Failed to update account");
+  }
+  return { customer: data.customer, warnings: data.warnings ?? [] };
+}
+
 export async function fetchTerritories(): Promise<{ territoryId: string; name: string }[]> {
   const res = await fetch(`${API}/territories`);
   if (!res.ok) throw new Error("Failed to load territories");
@@ -81,6 +111,31 @@ export async function applyOrderSelection(
   const data = (await res.json()) as CustomerUploadSummary;
   if (!res.ok && data.errors?.length) return data;
   if (!res.ok) throw new Error("Failed to apply order selection");
+  return data;
+}
+
+/** Add accounts to this week's orders without replacing existing orders. */
+export async function addOrderSelections(
+  selections: OrderSelectionInput[]
+): Promise<CustomerUploadSummary> {
+  const res = await fetch(`${API}/orders/selection/add`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ selections }),
+  });
+  const data = (await res.json().catch(() => ({}))) as CustomerUploadSummary & {
+    error?: string;
+  };
+  if (!res.ok && data.errors?.length) return data;
+  if (!res.ok) {
+    throw new Error(
+      data.error ??
+        data.errors?.join(" · ") ??
+        (res.status === 404
+          ? "Server is missing the add-orders API. Restart the dev server (npm run dev)."
+          : `Failed to add orders (${res.status})`)
+    );
+  }
   return data;
 }
 
@@ -134,9 +189,22 @@ export async function addStopToRoute(
   return data;
 }
 
-export async function fetchRoutePlan(cycleId: string): Promise<RoutePlan> {
+export async function fetchRoutePlan(cycleId: string): Promise<RoutePlan | null> {
   const res = await fetch(`${API}/routes/${cycleId}`);
+  if (res.status === 404) return null;
   if (!res.ok) throw new Error("Failed to load route plan");
+  return res.json();
+}
+
+/** Build or rebuild a route plan from current orders (manual action). */
+export async function buildRoute(cycleId: string): Promise<RoutePlan> {
+  const res = await fetch(`${API}/routes/${encodeURIComponent(cycleId)}/build`, {
+    method: "POST",
+  });
+  if (!res.ok) {
+    const data = (await res.json().catch(() => ({}))) as { error?: string };
+    throw new Error(data.error ?? "Failed to build route");
+  }
   return res.json();
 }
 
@@ -361,6 +429,22 @@ export async function addDay(cycleId: string): Promise<RoutePlan> {
 export async function addTruck(cycleId: string): Promise<RoutePlan> {
   const res = await fetch(`${API}/routes/${cycleId}/add-truck`, { method: "POST" });
   if (!res.ok) throw new Error("Failed to add truck");
+  return res.json();
+}
+
+export async function removeEmptySegment(
+  cycleId: string,
+  segmentId: string
+): Promise<RoutePlan> {
+  const res = await fetch(`${API}/routes/${encodeURIComponent(cycleId)}/remove-segment`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ segmentId }),
+  });
+  if (!res.ok) {
+    const data = (await res.json().catch(() => ({}))) as { error?: string };
+    throw new Error(data.error ?? "Failed to remove empty truck or day");
+  }
   return res.json();
 }
 

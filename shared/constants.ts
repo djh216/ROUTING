@@ -26,6 +26,10 @@ export const MAX_DRIVER_HOURS = 12;
 export const PITTSBURGH_HAUL_MILES = 280;
 /** Pittsburgh multi-day runs: Wednesday, Thursday, and an optional Friday. */
 export const PITTSBURGH_MAX_DAYS = 3;
+/** Single-truck routes always keep at least one truck column. */
+export const BASE_TRUCK_SEGMENT_COUNT = 1;
+/** Pittsburgh multi-day plans always include Wed + Thu; optional days are appended. */
+export const BASE_MULTI_DAY_SEGMENT_COUNT = 2;
 /** assign-day target that creates the next Pittsburgh day and moves the stop onto it. */
 export const NEW_DAY_SEGMENT_ID = "new-day";
 

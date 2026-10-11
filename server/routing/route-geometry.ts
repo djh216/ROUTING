@@ -188,7 +188,10 @@ async function buildSegmentDetails(
     };
   }
 
-  for (let i = 0; i < waypoints.length - 1; i++) {
+  const startsAtDepot = segment?.startLocation === "Scranton";
+  const legCount = waypoints.length - 1;
+
+  for (let i = 0; i < legCount; i++) {
     const fromCoords = waypoints[i];
     const toCoords = waypoints[i + 1];
 
@@ -197,19 +200,31 @@ async function buildSegmentDetails(
     let toName: string;
     let toStopId: string | undefined;
 
-    if (i === 0) {
-      fromName = segment?.startLocation === "Scranton" ? "Scranton Depot" : "Start Location";
+    if (startsAtDepot && i === 0) {
+      fromName = "Scranton Depot";
       toStopId = stops[0]?.id;
       toName = stops[0] ? `${stops[0].customerName} (${stops[0].city})` : "Stop 1";
-    } else if (i <= stops.length - 1) {
-      fromStopId = stops[i - 1]?.id;
-      fromName = stops[i - 1] ? `${stops[i - 1].customerName} (${stops[i - 1].city})` : `Stop ${i}`;
-      toStopId = stops[i]?.id;
-      toName = stops[i] ? `${stops[i].customerName} (${stops[i].city})` : `Stop ${i + 1}`;
-    } else {
+    } else if (
+      segment?.endLocation === "Scranton" &&
+      i === legCount - 1 &&
+      stops.length > 0
+    ) {
       fromStopId = stops[stops.length - 1]?.id;
-      fromName = stops[stops.length - 1] ? `${stops[stops.length - 1].customerName} (${stops[stops.length - 1].city})` : "Last Stop";
+      fromName = stops[stops.length - 1]
+        ? `${stops[stops.length - 1].customerName} (${stops[stops.length - 1].city})`
+        : "Last Stop";
       toName = "Scranton Depot (Return)";
+    } else {
+      const fromIdx = startsAtDepot ? i - 1 : i;
+      const toIdx = startsAtDepot ? i : i + 1;
+      fromStopId = stops[fromIdx]?.id;
+      fromName = stops[fromIdx]
+        ? `${stops[fromIdx].customerName} (${stops[fromIdx].city})`
+        : `Stop ${fromIdx + 1}`;
+      toStopId = stops[toIdx]?.id;
+      toName = stops[toIdx]
+        ? `${stops[toIdx].customerName} (${stops[toIdx].city})`
+        : `Stop ${toIdx + 1}`;
     }
 
     let legPath: LatLng[];

@@ -11,13 +11,29 @@ interface CustomerUploadProps {
   onUploaded: () => void;
   onCustomersLoaded?: () => void;
   refreshKey?: number;
+  /** Section heading; omit for no title */
+  title?: string;
+  /** Sidebar stack vs horizontal toolbar (customer database page) */
+  layout?: "sidebar" | "inline";
 }
 
-export default function CustomerUpload({ onUploaded, onCustomersLoaded, refreshKey = 0 }: CustomerUploadProps) {
+export default function CustomerUpload({
+  onUploaded,
+  onCustomersLoaded,
+  refreshKey = 0,
+  title = "Weekly customers",
+  layout = "sidebar",
+}: CustomerUploadProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [uploading, setUploading] = useState(false);
   const [status, setStatus] = useState<CustomerUploadSummary | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [parseIssuesOpen, setParseIssuesOpen] = useState(false);
+
+  const parseIssues = [
+    ...(status?.errors ?? []).map((message) => ({ kind: "error" as const, message })),
+    ...(status?.warnings ?? []).map((message) => ({ kind: "warn" as const, message })),
+  ];
 
   useEffect(() => {
     fetchUploadStatus().then(setStatus).catch(() => {});
@@ -26,13 +42,12 @@ export default function CustomerUpload({ onUploaded, onCustomersLoaded, refreshK
   async function handleFile(file: File) {
     setUploading(true);
     setError(null);
+    setParseIssuesOpen(false);
     try {
       const text = await file.text();
       const result = await uploadCustomersCsv(text, file.name);
       setStatus(result);
-      if (result.errors.length > 0) {
-        setError(result.errors.join(" · "));
-      } else {
+      if (result.errors.length === 0) {
         onCustomersLoaded?.();
         if (result.orderCount > 0) onUploaded();
       }
@@ -79,8 +94,8 @@ export default function CustomerUpload({ onUploaded, onCustomersLoaded, refreshK
   }
 
   return (
-    <section className="customer-upload">
-      <h2>Weekly customers</h2>
+    <section className={`customer-upload${layout === "inline" ? " customer-upload--inline" : ""}`}>
+      {title ? <h2>{title}</h2> : null}
 
       <input
         ref={inputRef}
@@ -133,18 +148,39 @@ export default function CustomerUpload({ onUploaded, onCustomersLoaded, refreshK
         </p>
       )}
 
-      {status?.warnings.map((w) => (
-        <p key={w} className="customer-upload__warn">
-          {w}
-        </p>
-      ))}
+      {parseIssues.length > 0 && (
+        <div className="customer-upload__issues">
+          <button
+            type="button"
+            className="customer-upload__issues-toggle"
+            aria-expanded={parseIssuesOpen}
+            onClick={() => setParseIssuesOpen((open) => !open)}
+          >
+            {parseIssues.length} row{parseIssues.length !== 1 ? "s" : ""} with parse issues
+            <span className="customer-upload__issues-chevron" aria-hidden>
+              {parseIssuesOpen ? "▾" : "▸"}
+            </span>
+          </button>
+          {parseIssuesOpen && (
+            <ul className="customer-upload__issues-list">
+              {parseIssues.map((item, index) => (
+                <li
+                  key={`${index}-${item.message}`}
+                  className={
+                    item.kind === "error"
+                      ? "customer-upload__issues-item customer-upload__issues-item--error"
+                      : "customer-upload__issues-item customer-upload__issues-item--warn"
+                  }
+                >
+                  {item.message}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
 
       {error && <p className="customer-upload__error">{error}</p>}
-      {status?.errors.map((e) => (
-        <p key={e} className="customer-upload__error">
-          {e}
-        </p>
-      ))}
     </section>
   );
 }

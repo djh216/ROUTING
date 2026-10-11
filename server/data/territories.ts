@@ -111,6 +111,13 @@ const TERRITORY_ALIASES: Record<string, string> = {
   "southern susquenhanna valley": "southern-susquehanna",
   "northern susquehanna valley": "northern-susquehanna",
   pittsburgh: "pittsburgh",
+  pw: "western-philly",
+};
+
+/** When territory column is blank, infer from delivery city (Outfield export quirks). */
+const CITY_TERRITORY_HINTS: Record<string, string> = {
+  "bryn mawr": "western-philly",
+  "bala cynwyd": "western-philly",
 };
 
 export function getTerritoryIdsForCycle(cycle: TerritoryCycle): string[] {
@@ -125,8 +132,12 @@ export function cycleIncludesTerritory(
 }
 
 /** Resolve territory name or id from CSV/manual input */
-export function resolveTerritoryInput(raw: string): string | null {
+export function resolveTerritoryInput(raw: string, cityHint?: string): string | null {
   const key = raw.trim().toLowerCase();
+  if (!key && cityHint?.trim()) {
+    const cityKey = cityHint.trim().toLowerCase();
+    if (CITY_TERRITORY_HINTS[cityKey]) return CITY_TERRITORY_HINTS[cityKey];
+  }
   if (TERRITORY_ALIASES[key]) return TERRITORY_ALIASES[key];
   const slug = key.replace(/\s+/g, "-");
   if (TERRITORY_DISPLAY_NAMES[slug]) return slug;

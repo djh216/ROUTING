@@ -7,6 +7,7 @@ import { fileURLToPath } from "url";
 import { TERRITORY_CYCLES, resolveCycleId, resolveTerritoryInput } from "./data/territories.js";
 import {
   applyOrderSelection,
+  addOrderSelections,
   addManualOrder,
   addStopToRoute,
   clearOrdersForCycle,
@@ -18,6 +19,7 @@ import {
   clearCustomerData,
   regeocodeAllCustomers,
   removeOrderForCustomer,
+  updateCustomerAccount,
   updateCustomerContact,
   updateCustomerDeliveryInstructions,
 } from "./data/customer-store.js";
@@ -27,6 +29,7 @@ import {
   appendStopToSegment,
   appendDaySegment,
   appendTruckSegment,
+  removeEmptySegment,
   assignStopToDay,
   assignStopToTruck,
   buildRoutePlan,
@@ -59,7 +62,14 @@ import {
   getGoogleMapsStatus,
   probeGoogleMapsAvailability,
 } from "./routing/google-maps-status.js";
-import type { ManualOrderInput, OrderSelectionInput, RoutePlan, Stop, StopAssignment } from "../shared/types.js";
+import type {
+  CustomerAccountUpdate,
+  ManualOrderInput,
+  OrderSelectionInput,
+  RoutePlan,
+  Stop,
+  StopAssignment,
+} from "../shared/types.js";
 import { SCRANTON_DEPOT } from "../shared/constants.js";
 
 const app = express();
@@ -91,10 +101,16 @@ function getMatrixForCycle(cycleId: string, plan: RoutePlan): TravelMatrix {
   );
 }
 
+function getCachedRoutePlan(cycleId: string): RoutePlan | undefined {
+  return routePlans.get(cycleId);
+}
+
 async function getOrCreatePlan(cycleId: string): Promise<RoutePlan> {
-  const cached = routePlans.get(cycleId);
-  if (cached) return cached;
-  return buildAndCachePlan(cycleId);
+  const plan = getCachedRoutePlan(cycleId);
+  if (!plan) {
+    throw new Error("Route not built yet. Build the route first.");
+  }
+  return plan;
 }
 
 async function buildAndCachePlan(cycleId: string): Promise<RoutePlan> {
@@ -282,6 +298,13 @@ app.post("/api/orders/selection", (req, res) => {
   res.status(summary.errors.length > 0 ? 400 : 200).json(summary);
 });
 
+app.post("/api/orders/selection/add", (req, res) => {
+  const { selections } = req.body as { selections: OrderSelectionInput[] };
+  const summary = addOrderSelections(selections ?? [], REFERENCE_DATE);
+  if (summary.errors.length === 0) clearRoutePlans();
+  res.status(summary.errors.length > 0 ? 400 : 200).json(summary);
+});
+
 app.delete("/api/orders/customer/:customerId", async (req, res) => {
   const existing = getOrders().find((o) => o.customerId === req.params.customerId);
   const summary = removeOrderForCustomer(req.params.customerId, REFERENCE_DATE);
@@ -355,8 +378,7 @@ app.post("/api/routes/:cycleId/add-stop", async (req, res) => {
     }
 
     invalidateRoutePlan(cycleId);
-    const plan = await buildAndCachePlan(cycleId);
-    res.json({ ...result, plan });
+    res.json({ ...result, plan: getCachedRoutePlan(cycleId) ?? undefined });
   } catch (e) {
     res.status(500).json({
       summary: {
@@ -394,9 +416,18 @@ app.get("/api/batches", (_req, res) => {
   res.json(batches);
 });
 
-app.get("/api/routes/:cycleId", async (req, res) => {
+app.get("/api/routes/:cycleId", (req, res) => {
+  const plan = getCachedRoutePlan(req.params.cycleId);
+  if (!plan) {
+    res.status(404).json({ error: "Route not built yet. Build the route first." });
+    return;
+  }
+  res.json(plan);
+});
+
+app.post("/api/routes/:cycleId/build", async (req, res) => {
   try {
-    const plan = await getOrCreatePlan(req.params.cycleId);
+    const plan = await buildAndCachePlan(req.params.cycleId);
     res.json(plan);
   } catch (e) {
     res.status(500).json({ error: e instanceof Error ? e.message : "Failed to build route" });
@@ -602,6 +633,52 @@ app.post("/api/routes/:cycleId/stop-contact", async (req, res) => {
   }
 });
 
+function syncCustomerFieldsOnRoutePlans(customerId: string, customer: {
+  name: string;
+  address: string;
+  city: string;
+  lat: number;
+  lng: number;
+  contactName: string;
+  contactPhone: string;
+  deliveryInstructions: string;
+}) {
+  for (const plan of routePlans.values()) {
+    for (const stop of plan.allStops) {
+      if (stop.customerId !== customerId && stop.id !== `stop-${customerId}`) continue;
+      stop.customerName = customer.name;
+      stop.address = customer.address;
+      stop.city = customer.city;
+      stop.lat = customer.lat;
+      stop.lng = customer.lng;
+      stop.contactName = customer.contactName;
+      stop.contactPhone = customer.contactPhone;
+      stop.deliveryInstructions = customer.deliveryInstructions;
+    }
+  }
+}
+
+app.patch("/api/customers/:customerId", async (req, res) => {
+  try {
+    const body = req.body as CustomerAccountUpdate;
+    const { customer, warnings } = await updateCustomerAccount(req.params.customerId, body);
+    if (!customer) {
+      res.status(400).json({
+        error: warnings[0] ?? "Customer not found",
+        warnings,
+      });
+      return;
+    }
+    syncCustomerFieldsOnRoutePlans(customer.id, customer);
+    res.json({ customer, warnings });
+  } catch (e) {
+    res.status(500).json({
+      error: e instanceof Error ? e.message : "Failed to update customer",
+      warnings: [],
+    });
+  }
+});
+
 app.post("/api/customers/:customerId/delivery-instructions", (req, res) => {
   const { deliveryInstructions } = req.body as { deliveryInstructions: string };
   const cleanInstructions = typeof deliveryInstructions === "string" ? deliveryInstructions.trim() : "";
@@ -792,6 +869,29 @@ app.post("/api/routes/:cycleId/add-truck", async (req, res) => {
     res.json(updated);
   } catch (e) {
     res.status(500).json({ error: e instanceof Error ? e.message : "Failed to add truck" });
+  }
+});
+
+app.post("/api/routes/:cycleId/remove-segment", async (req, res) => {
+  try {
+    const plan = await getOrCreatePlan(req.params.cycleId);
+    if (plan.status === "locked") {
+      res.status(400).json({ error: "Route is locked" });
+      return;
+    }
+    const { segmentId } = req.body as { segmentId?: string };
+    if (!segmentId) {
+      res.status(400).json({ error: "segmentId is required" });
+      return;
+    }
+    const matrix = getMatrixForCycle(req.params.cycleId, plan);
+    const updated = await removeEmptySegment(plan, segmentId, matrix);
+    routePlans.set(req.params.cycleId, updated);
+    res.json(updated);
+  } catch (e) {
+    const message = e instanceof Error ? e.message : "Failed to remove segment";
+    const status = message.includes("can be removed") ? 400 : 500;
+    res.status(status).json({ error: message });
   }
 });
 

@@ -29,6 +29,13 @@ const HEADER_ALIASES: Record<string, string> = {
   name_and_phone_numbers: "phone_field",
   phone: "phone_field",
   contact_phone: "phone_field",
+  emails: "contact_email",
+  email: "contact_email",
+  e_mail: "contact_email",
+  email_address: "contact_email",
+  email_addresses: "contact_email",
+  contact_email: "contact_email",
+  contact_emails: "contact_email",
   contact_name: "contact_name",
   contact: "contact_name",
   first_name: "contact_name",
@@ -38,6 +45,12 @@ const HEADER_ALIASES: Record<string, string> = {
   delivery_instructions: "delivery_instructions",
   instructions: "delivery_instructions",
   delivery_notes: "delivery_instructions",
+  team_members: "team_members",
+  team: "team_members",
+  lid: "outfield_lid",
+  outfield_lid: "outfield_lid",
+  na_payment_method: "payment_method",
+  payment_method: "payment_method",
   territory: "territory",
   lat: "lat",
   latitude: "lat",
@@ -59,16 +72,52 @@ export interface CsvImportResult {
   warnings: string[];
 }
 
+const PHONE_FIELD_LABEL =
+  /^(approvals?|main|phone|contact|tel|cell|mobile)\s*:?\s*/i;
+
+const GENERIC_CONTACT_TOKENS = new Set([
+  "approvals",
+  "approval",
+  "main",
+  "phone",
+  "contact",
+  "tel",
+  "cell",
+  "mobile",
+]);
+
+function stripPhoneFieldLabels(raw: string): string {
+  let text = raw.trim();
+  while (PHONE_FIELD_LABEL.test(text)) {
+    text = text.replace(PHONE_FIELD_LABEL, "").trim();
+  }
+  return text;
+}
+
+function pickContactName(beforePhone: string, afterPhone: string): string {
+  const candidates = [
+    ...beforePhone.split(/\s+/).filter(Boolean),
+    ...afterPhone.split(/\s+/).filter(Boolean),
+  ];
+  for (const token of candidates) {
+    const lower = token.replace(/:$/, "").toLowerCase();
+    if (GENERIC_CONTACT_TOKENS.has(lower)) continue;
+    if (/^\d/.test(token)) continue;
+    return token.replace(/:$/, "");
+  }
+  return "Contact";
+}
+
 /** Parse phone numbers column: contact first name + phone, e.g. "Maria 215-555-0101" */
 export function parseContactPhoneField(raw: string): {
   contactName: string;
   contactPhone: string;
 } {
-  const text = raw.trim();
+  const text = stripPhoneFieldLabels(raw.trim());
   if (!text) return { contactName: "", contactPhone: "" };
 
   const phoneMatch = text.match(
-    /(?:\+?1[\s.-]?)?(?:\(?\d{3}\)?[\s.-]?)\d{3}[\s.-]?\d{4}\b/
+    /(?:\+?1[\s.-]?)?(?:\(?\d{3}\)?[\s.-]?)\d{3}[\s.-]+\d{4}\b|(?:\+?1[\s.-]?)?(?:\(?\d{3}\)?[\s.-]?)\d{3}[\s.-]?\d{4}\b/
   );
   if (phoneMatch) {
     const contactPhone = phoneMatch[0].replace(/\s+/g, " ").trim();
@@ -82,11 +131,7 @@ export function parseContactPhoneField(raw: string): {
       .replace(/^[\s,;|:–—-]+/g, "")
       .trim();
 
-    // First name from text before or after the phone number
-    let contactName =
-      beforePhone.split(/\s+/).filter(Boolean)[0] ||
-      afterPhone.split(/\s+/).filter(Boolean)[0] ||
-      "Contact";
+    const contactName = pickContactName(beforePhone, afterPhone);
     return normalizeContactFields(contactName, contactPhone);
   }
 
@@ -94,7 +139,17 @@ export function parseContactPhoneField(raw: string): {
   const last = parts[parts.length - 1];
   const digits = last.replace(/\D/g, "");
   if (digits.length >= 10) {
-    return normalizeContactFields(parts.slice(0, -1)[0] || "Contact", last);
+    const namePart = parts.slice(0, -1).join(" ");
+    return normalizeContactFields(
+      pickContactName(namePart, "") || parts[0] || "Contact",
+      last
+    );
+  }
+
+  const nameOnly = text.includes(":") ? text.split(":").pop()?.trim() ?? text : text;
+  const firstToken = nameOnly.split(/\s+/).filter(Boolean)[0] ?? "";
+  if (firstToken && !GENERIC_CONTACT_TOKENS.has(firstToken.toLowerCase())) {
+    return normalizeContactFields(firstToken, "");
   }
 
   return normalizeContactFields(text.split(/\s+/)[0] || text, "");
@@ -134,6 +189,17 @@ function parseCsvLine(line: string): string[] {
   return fields;
 }
 
+/** Trim Outfield email cells; keep multiple addresses in one string when present. */
+export function parseContactEmailField(raw: string): string {
+  let text = raw.trim();
+  if (!text) return "";
+  text = text.replace(/^mailto:/i, "").trim();
+  if (text.startsWith('"') && text.endsWith('"')) {
+    text = text.slice(1, -1).trim();
+  }
+  return text;
+}
+
 function slugify(name: string, index: number): string {
   const base = name
     .toLowerCase()
@@ -156,6 +222,10 @@ export async function parseCustomersCsv(
     .split(/\r?\n/)
     .map((l) => l.trim())
     .filter((l) => l.length > 0);
+
+  if (lines.length > 0) {
+    lines[0] = lines[0].replace(/^\uFEFF/, "");
+  }
 
   if (lines.length < 2) {
     return {
@@ -207,10 +277,18 @@ export async function parseCustomersCsv(
       continue;
     }
 
-    const territoryId = resolveTerritoryInput(row.territory ?? "");
+    const territoryRaw = row.territory ?? "";
+    const territoryId = resolveTerritoryInput(territoryRaw, row.city);
     if (!territoryId) {
-      errors.push(`Row ${rowIdx + 1} (${name}): unknown territory "${row.territory}"`);
+      errors.push(
+        `Row ${rowIdx + 1} (${name}): unknown territory "${territoryRaw || "(blank)"}"`
+      );
       continue;
+    }
+    if (!territoryRaw.trim() && row.city?.trim()) {
+      warnings.push(
+        `Row ${rowIdx + 1} (${name}): blank territory — inferred from city "${row.city}"`
+      );
     }
 
     const parsedContact = parseContactPhoneField(row.phone_field ?? "");
@@ -257,6 +335,11 @@ export async function parseCustomersCsv(
     while (seenIds.has(id)) id = `${id}-${rowIdx}`;
     seenIds.add(id);
 
+    const teamMembers = row.team_members?.trim() ?? "";
+    const outfieldLid = row.outfield_lid?.trim() ?? "";
+    const paymentMethod = row.payment_method?.trim() ?? "";
+    const contactEmail = parseContactEmailField(row.contact_email ?? "");
+
     customers.push({
       id,
       name,
@@ -267,7 +350,11 @@ export async function parseCustomersCsv(
       lng,
       contactName,
       contactPhone,
+      contactEmail,
       deliveryInstructions: row.delivery_instructions,
+      ...(teamMembers ? { teamMembers } : {}),
+      ...(outfieldLid ? { outfieldLid } : {}),
+      ...(paymentMethod ? { paymentMethod } : {}),
     });
 
     if (!geocodedFromAddress && !row.lat) {

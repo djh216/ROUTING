@@ -8,7 +8,9 @@ export function generateRoutePdf(
   plan: RoutePlan,
   segment: Segment,
   stops: Stop[],
-  options: { autoDownload?: boolean } = { autoDownload: true }
+  options: { autoDownload?: boolean } = {
+    autoDownload: true,
+  }
 ): { blobUrl: string; filename: string } {
   const doc = new jsPDF({
     orientation: "portrait",

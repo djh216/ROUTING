@@ -3,6 +3,9 @@ import { seedCustomerStoreForTests } from "../data/customer-store.js";
 import { TERRITORY_CYCLES } from "../data/territories.js";
 import {
   appendDaySegment,
+  appendTruckSegment,
+  removeEmptySegment,
+  canRemoveEmptySegment,
   appendStopToSegment,
   applySegmentStops,
   assignStopToDay,
@@ -384,7 +387,7 @@ assert(withFriday.segments[2].label === "Friday (overflow)", "Third day should b
 assert(withFriday.segments[0].label === "Wednesday (primary)", "Wednesday label should stay");
 assert(withFriday.segments[1].label === "Thursday (overflow)", "Thursday label should stay");
 assert(withFriday.segments[1].endLocation === "overnight", "Thursday should stay out overnight once Friday exists");
-assert(withFriday.segments[2].startLocation === "overnight", "Friday should start from the previous day's last stop");
+assert(withFriday.segments[2].startLocation === "overnight", "Friday should be an overnight-start day");
 assert(withFriday.segments[2].endLocation === "Scranton", "Friday should return to Scranton");
 assert(withFriday.segments[2].stops.length === 0, "A manually added Friday starts empty");
 assert(
@@ -394,6 +397,40 @@ assert(
 
 const stillThree = await appendDaySegment(withFriday, pittsburghRunMatrix);
 assert(stillThree.segments.length === 3, "Pittsburgh should not grow past three days");
+
+const emptyFridayId = withFriday.segments[2].id;
+assert(
+  canRemoveEmptySegment(withFriday, emptyFridayId),
+  "Empty added Friday should be removable"
+);
+assert(
+  !canRemoveEmptySegment(withFriday, withFriday.segments[0].id),
+  "Primary Wednesday cannot be removed"
+);
+const withoutFriday = await removeEmptySegment(
+  withFriday,
+  emptyFridayId,
+  pittsburghRunMatrix
+);
+assert(withoutFriday.segments.length === 2, "Removing empty Friday returns to Wed + Thu");
+
+const { plan: singleTruckPlan, matrix: singleTruckMatrix } = await buildRoutePlan(
+  "western-susquehanna-wed",
+  ORDERS,
+  REF
+);
+const twoTrucks = await appendTruckSegment(singleTruckPlan, singleTruckMatrix);
+assert(twoTrucks.segments.length === 2, "Single-truck route can add a second truck");
+assert(
+  canRemoveEmptySegment(twoTrucks, twoTrucks.segments[1].id),
+  "Empty added truck should be removable"
+);
+const oneTruck = await removeEmptySegment(
+  twoTrucks,
+  twoTrucks.segments[1].id,
+  singleTruckMatrix
+);
+assert(oneTruck.segments.length === 1, "Removing empty truck returns to one column");
 
 const fridayStopId = withFriday.segments[0].stops[0].stopId;
 const assignedFriday = await assignStopToDay(
@@ -415,6 +452,10 @@ if (fridayFirst) {
   assert(
     assignedFriday.segments[2].validation.stopEtas[fridayFirst] === "10:00 AM",
     "Friday first stop must be at 10:00 AM"
+  );
+  assert(
+    assignedFriday.segments[2].validation.stopDriveMinutes?.[fridayFirst] === 0,
+    "Overnight day should not count drive time to the first stop"
   );
 }
 

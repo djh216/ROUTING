@@ -8,6 +8,8 @@ import {
   SERVICE_MINUTES_PER_STOP,
   driverBreakAfterStopIndex,
 } from "../../shared/constants.js";
+import { canRemoveEmptySegment as isRemovableEmptySegment } from "../../shared/routeSegments.js";
+import { isOvernightSegmentStart } from "../../shared/routeGeometry.js";
 import {
   formatMinutesAsTime,
   formatTimeOfDay,
@@ -504,7 +506,8 @@ function simulateLeg(
   rollingDriveMinutes?: Record<string, number>,
   rollingReturnMinutes?: number,
   serviceOverrides?: Record<string, number>,
-  breakAfterStopIndex = -1
+  breakAfterStopIndex = -1,
+  skipDriveToFirstStop = false
 ): LegSimulation {
   const warnings: string[] = [];
   const errors: string[] = [];
@@ -529,20 +532,24 @@ function simulateLeg(
   }
 
   const first = stopMap.get(stopIds[0])!;
-  const travelToFirstMinutes = scheduleDriveMinutes(
-    driveMinutesForStop(
-      stopIds[0],
-      start,
-      stopPoint(first),
-      matrix,
-      driveOverrides,
-      rollingDriveMinutes
-    )
-  );
+  const travelToFirstMinutes = skipDriveToFirstStop
+    ? 0
+    : scheduleDriveMinutes(
+        driveMinutesForStop(
+          stopIds[0],
+          start,
+          stopPoint(first),
+          matrix,
+          driveOverrides,
+          rollingDriveMinutes
+        )
+      );
   stopDriveMinutes[stopIds[0]] = travelToFirstMinutes;
   let totalDriveMinutes = travelToFirstMinutes;
   const firstArrival = firstStopArrivalMinutes ?? winStart;
-  const departureTime = firstArrival - travelToFirstMinutes;
+  const departureTime = skipDriveToFirstStop
+    ? firstArrival
+    : firstArrival - travelToFirstMinutes;
 
   const orderedStops = stopIds
     .map((id) => stopMap.get(id))
@@ -1116,12 +1123,15 @@ function validateSegment(
   const breakAfterStopIndex = breakAfterStopId
     ? stopIds.indexOf(breakAfterStopId)
     : -1;
+  const overnightStart = isOvernightSegmentStart(segment.startLocation);
+  const firstStop = stopMap.get(stopIds[0]);
   const start: GeoPoint =
     segment.startLocation === "Scranton"
       ? { lat: depot.lat, lng: depot.lng }
-      : { lat: prevEndLat ?? depot.lat, lng: prevEndLng ?? depot.lng };
+      : overnightStart && firstStop
+        ? stopPoint(firstStop)
+        : { lat: prevEndLat ?? depot.lat, lng: prevEndLng ?? depot.lng };
 
-  const firstStop = stopMap.get(stopIds[0]);
   const firstStopArrivalMinutes = firstStopArrivalMinutesFor(firstStop, firstStopTime);
 
   const leg = simulateLeg(
@@ -1138,7 +1148,8 @@ function validateSegment(
     rollingDriveMinutes,
     rollingReturnMinutes,
     serviceOverrides,
-    breakAfterStopIndex
+    breakAfterStopIndex,
+    overnightStart
   );
 
   const totalCases = stopIds.reduce((s, id) => s + (stopMap.get(id)?.cases ?? 0), 0);
@@ -1200,7 +1211,8 @@ function validateSegment(
           undefined,
           undefined,
           serviceOverrides,
-          optBreakIdx
+          optBreakIdx,
+          overnightStart
         );
         optimizedRouteMinutes = optLeg.totalRouteMinutes;
         optimizedDriveMinutes = optLeg.totalDriveMinutes;
@@ -1370,12 +1382,16 @@ export async function revalidatePlanSegments(
           })()
         : undefined;
 
+    const stopIds = updated[i].stops.map((s) => s.stopId);
+    const overnightStart = isOvernightSegmentStart(updated[i].startLocation);
+    const leadingStopForStart = stopIds[0] ? stopMap.get(stopIds[0]) : undefined;
     const start: GeoPoint =
       updated[i].startLocation === "Scranton"
         ? { lat: SCRANTON_DEPOT.lat, lng: SCRANTON_DEPOT.lng }
-        : { lat: prevEnd?.lat ?? prevLat, lng: prevEnd?.lng ?? prevLng };
+        : overnightStart && leadingStopForStart
+          ? { lat: leadingStopForStart.lat, lng: leadingStopForStart.lng }
+          : { lat: prevEnd?.lat ?? prevLat, lng: prevEnd?.lng ?? prevLng };
 
-    const stopIds = updated[i].stops.map((s) => s.stopId);
     let rollingDriveMinutes: Record<string, number> | undefined;
     let rollingReturnMinutes: number | undefined;
     let rollingBaseDriveMinutes: Record<string, number> | undefined;
@@ -1403,6 +1419,7 @@ export async function revalidatePlanSegments(
         returnToDepot: updated[i].endLocation === "Scranton",
         depot: { lat: SCRANTON_DEPOT.lat, lng: SCRANTON_DEPOT.lng },
         apiKey: googleKey,
+        skipDriveToFirstStop: overnightStart,
       });
       rollingDriveMinutes = rolling.stopDriveMinutes;
       rollingReturnMinutes = rolling.returnDriveMinutes;
@@ -2325,6 +2342,60 @@ export async function appendDaySegment(
   return applySegmentStops(
     { ...plan, segments: combined },
     combined.map((s) => ({ segmentId: s.id, stops: s.stops })),
+    matrix
+  );
+}
+
+function stripSegmentPlanOverrides(plan: RoutePlan, segmentId: string): RoutePlan {
+  const strip = <T extends Record<string, unknown>>(obj?: T): T | undefined => {
+    if (!obj) return undefined;
+    const next = { ...obj };
+    delete next[segmentId];
+    return Object.keys(next).length > 0 ? next : undefined;
+  };
+  return {
+    ...plan,
+    driveMinuteOverrides: strip(plan.driveMinuteOverrides),
+    serviceMinuteOverrides: strip(plan.serviceMinuteOverrides),
+    firstStopTimeOverrides: strip(plan.firstStopTimeOverrides),
+    driverBreakAfterStop: strip(plan.driverBreakAfterStop),
+  };
+}
+
+export function canRemoveEmptySegment(plan: RoutePlan, segmentId: string): boolean {
+  const idx = plan.segments.findIndex((s) => s.id === segmentId);
+  if (idx < 0) return false;
+  return isRemovableEmptySegment(plan, plan.segments[idx], idx);
+}
+
+export async function removeEmptySegment(
+  plan: RoutePlan,
+  segmentId: string,
+  travelMatrix?: TravelMatrix
+): Promise<RoutePlan> {
+  if (!canRemoveEmptySegment(plan, segmentId)) {
+    throw new Error("Only empty added trucks or days can be removed");
+  }
+
+  const cycle = getCycleById(plan.cycleId);
+  const remaining = plan.segments.filter((s) => s.id !== segmentId);
+  let segments = remaining.map((s, i) => ({ ...s, sequence: i }));
+
+  if (cycle?.multiDay) {
+    segments = applyMultiDaySegmentMeta(plan, segments);
+  } else {
+    segments = segments.map((s, i) => ({
+      ...s,
+      label: `Truck ${i + 1}`,
+    }));
+  }
+
+  const matrix = resolveMatrix(SCRANTON_DEPOT, plan.allStops, travelMatrix);
+  const stripped = stripSegmentPlanOverrides(plan, segmentId);
+
+  return applySegmentStops(
+    { ...stripped, segments },
+    segments.map((s) => ({ segmentId: s.id, stops: s.stops })),
     matrix
   );
 }

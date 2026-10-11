@@ -4,7 +4,7 @@ import { createServer as createViteServer } from "vite";
 import { app } from "./server/index.js";
 import { probeGoogleMapsAvailability } from "./server/routing/google-maps-status.js";
 
-const PORT = 3000;
+const PORT = Number(process.env.PORT) || 3000;
 
 async function startServer() {
   // Vite middleware for development

@@ -1,16 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
+import { generateMapPdf } from "../lib/generateMapPdf";
 import { MapContainer, Marker, Polyline, Popup, TileLayer, useMap } from "react-leaflet";
 import L from "leaflet";
 import type { RoutePlan } from "@shared/types";
 import type { SegmentUpdate } from "../lib/segmentDrag";
-import {
-  allMapPoints,
-  buildSegmentRoutes,
-  getLegColor,
-  TRAFFIC_COLORS,
-  type SegmentLegRoute,
-  type TrafficMapMode,
-} from "../lib/routeMapUtils";
+import { allMapPoints, buildSegmentRoutes } from "../lib/routeMapUtils";
 import type { RouteLegInfo, SegmentTrafficAlert, RouteGeometryResult } from "@shared/routeGeometry";
 import "leaflet/dist/leaflet.css";
 
@@ -65,16 +59,29 @@ function FitBounds({ points }: { points: [number, number][] }) {
   return null;
 }
 
-function MapFocusController({ focusPoints }: { focusPoints: [number, number][] | null }) {
+/** React Strict Mode can leave OSM tiles stuck at opacity 0 after load. */
+function EnsureVisibleTiles() {
   const map = useMap();
+
   useEffect(() => {
-    if (!focusPoints || focusPoints.length === 0) return;
-    if (focusPoints.length === 1) {
-      map.flyTo(focusPoints[0], 13);
-      return;
-    }
-    map.flyToBounds(L.latLngBounds(focusPoints), { padding: [60, 60], maxZoom: 13, duration: 1.0 });
-  }, [map, focusPoints]);
+    const revealTiles = () => {
+      map
+        .getContainer()
+        .querySelectorAll<HTMLImageElement>(".leaflet-tile-pane img.leaflet-tile-loaded")
+        .forEach((img) => {
+          img.style.opacity = "1";
+        });
+    };
+
+    map.on("tileload", revealTiles);
+    map.on("load", revealTiles);
+    map.whenReady(revealTiles);
+
+    return () => {
+      map.off("tileload", revealTiles);
+      map.off("load", revealTiles);
+    };
+  }, [map]);
 
   return null;
 }
@@ -84,7 +91,6 @@ export default function RouteMap({
   previewSegments,
   activeStopId,
   geometrySegments,
-  geometryPaths,
   geometrySource,
   geometryLoading,
   trafficRefreshPending,
@@ -94,9 +100,7 @@ export default function RouteMap({
   pendingRouteOrder,
   routeLocked,
 }: RouteMapProps) {
-  const [viewMode, setViewMode] = useState<TrafficMapMode>("traffic");
-  const [focusPoints, setFocusPoints] = useState<[number, number][] | null>(null);
-  const [showAlertDetails, setShowAlertDetails] = useState(false);
+  const [exportingMapPdf, setExportingMapPdf] = useState(false);
 
   const routes = useMemo(
     () =>
@@ -109,39 +113,6 @@ export default function RouteMap({
   const boundsPoints = useMemo(() => allMapPoints(plan, routes), [plan, routes]);
   const isPreview = !!previewSegments;
 
-  // Collect delayed legs across all segments
-  const delayedLegs = useMemo(() => {
-    const list: Array<{
-      segmentId: string;
-      segmentLabel: string;
-      truckColor: string;
-      leg: SegmentLegRoute;
-    }> = [];
-    for (const route of routes) {
-      for (const leg of route.legs) {
-        if (leg.delayLevel === "significant" || leg.delayLevel === "moderate") {
-          list.push({
-            segmentId: route.segmentId,
-            segmentLabel: route.label,
-            truckColor: route.color,
-            leg,
-          });
-        }
-      }
-    }
-    return list;
-  }, [routes]);
-
-  const significantLegs = useMemo(
-    () => delayedLegs.filter((d) => d.leg.delayLevel === "significant"),
-    [delayedLegs]
-  );
-
-  const totalDelayMinutes = useMemo(
-    () => delayedLegs.reduce((sum, d) => sum + (d.leg.trafficMinutes ?? 0), 0),
-    [delayedLegs]
-  );
-
   if (plan.allStops.length === 0) {
     return (
       <div className="route-map route-map--empty">
@@ -152,184 +123,22 @@ export default function RouteMap({
 
   return (
     <div className={`route-map${isPreview ? " route-map--preview" : ""}`}>
-      {/* Top Visual Alert & View Switcher Toolbar */}
-      <div className="route-map__top-bar">
-        {significantLegs.length > 0 ? (
-          <div className="route-map-traffic-alert route-map-traffic-alert--significant">
-            <div className="route-map-traffic-alert__header">
-              <div className="route-map-traffic-alert__badge">
-                <span className="route-map-traffic-alert__icon">⚠️</span>
-                <span>TRAFFIC DELAY ALERT</span>
-              </div>
-              <div className="route-map-traffic-alert__summary">
-                {significantLegs.length === 1 ? (
-                  <span>
-                    Significant delay of <strong>+{significantLegs[0].leg.trafficMinutes}m</strong> detected on{" "}
-                    <strong>{significantLegs[0].segmentLabel}</strong> between{" "}
-                    <em>{significantLegs[0].leg.fromName}</em> and <em>{significantLegs[0].leg.toName}</em>
-                  </span>
-                ) : (
-                  <span>
-                    <strong>{significantLegs.length} segments</strong> with significant delays (totaling{" "}
-                    <strong>+{totalDelayMinutes}m</strong> traffic delay via Distance Matrix API)
-                  </span>
-                )}
-              </div>
-              <div className="route-map-traffic-alert__actions">
-                <button
-                  type="button"
-                  className="route-map-btn route-map-btn--focus"
-                  onClick={() => {
-                    if (significantLegs.length > 0) {
-                      setFocusPoints(significantLegs[0].leg.path);
-                    }
-                  }}
-                  title="Zoom directly to the delayed road segment"
-                >
-                  Focus Delayed Leg
-                </button>
-                {focusPoints && (
-                  <button
-                    type="button"
-                    className="route-map-btn route-map-btn--reset"
-                    onClick={() => setFocusPoints(null)}
-                  >
-                    Reset View
-                  </button>
-                )}
-                {delayedLegs.length > 1 && (
-                  <button
-                    type="button"
-                    className="route-map-btn route-map-btn--details"
-                    onClick={() => setShowAlertDetails((prev) => !prev)}
-                  >
-                    {showAlertDetails ? "Hide Delays ▲" : `All Delays (${delayedLegs.length}) ▼`}
-                  </button>
-                )}
-              </div>
-            </div>
-
-            {showAlertDetails && (
-              <div className="route-map-traffic-alert__details">
-                <div className="route-map-traffic-alert__details-title">
-                  Distance Matrix API · Segment Delay Breakdown
-                </div>
-                <div className="route-map-traffic-alert__list">
-                  {delayedLegs.map((item, idx) => (
-                    <div
-                      key={`${item.segmentId}-${item.leg.legIndex}-${idx}`}
-                      className={`route-map-traffic-alert__item route-map-traffic-alert__item--${item.leg.delayLevel}`}
-                    >
-                      <span
-                        className="route-map-traffic-alert__dot"
-                        style={{
-                          background:
-                            item.leg.delayLevel === "significant"
-                              ? TRAFFIC_COLORS.significant
-                              : TRAFFIC_COLORS.moderate,
-                        }}
-                      />
-                      <div className="route-map-traffic-alert__item-content">
-                        <div className="route-map-traffic-alert__item-top">
-                          <strong>{item.segmentLabel}</strong>: {item.leg.fromName} → {item.leg.toName}
-                        </div>
-                        <div className="route-map-traffic-alert__item-sub">
-                          In traffic: <strong>{item.leg.driveMinutes}m</strong> (Typical:{" "}
-                          {item.leg.baseMinutes}m) ·{" "}
-                          <span
-                            className={`traffic-chip ${
-                              item.leg.delayLevel === "significant" ? "traffic-chip--severe" : "traffic-chip--moderate"
-                            }`}
-                          >
-                            +{item.leg.trafficMinutes}m delay
-                          </span>
-                        </div>
-                      </div>
-                      <button
-                        type="button"
-                        className="route-map-btn-link"
-                        onClick={() => setFocusPoints(item.leg.path)}
-                      >
-                        Zoom to segment
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-          </div>
-        ) : delayedLegs.length > 0 ? (
-          <div className="route-map-traffic-alert route-map-traffic-alert--moderate">
-            <span className="route-map-traffic-alert__icon">⚡</span>
-            <span>
-              Moderate traffic delay on {delayedLegs[0].segmentLabel} (+{delayedLegs[0].leg.trafficMinutes}m between{" "}
-              {delayedLegs[0].leg.fromName} and {delayedLegs[0].leg.toName})
-            </span>
-            <button
-              type="button"
-              className="route-map-btn-link ml-auto"
-              onClick={() => setFocusPoints(delayedLegs[0].leg.path)}
-            >
-              Zoom to leg
-            </button>
-          </div>
-        ) : (
-          <div className="route-map-traffic-alert route-map-traffic-alert--normal">
-            <span className="route-map-traffic-status-pill">
-              <span className="status-indicator status-indicator--green" />
-              <span>Distance Matrix API: Normal traffic flow across all segments (no significant delays)</span>
-            </span>
-            {focusPoints && (
-              <button
-                type="button"
-                className="route-map-btn-link ml-auto"
-                onClick={() => setFocusPoints(null)}
-              >
-                Reset Map View
-              </button>
-            )}
-          </div>
-        )}
-
-        {/* View Mode Switcher */}
-        <div className="route-map-mode-bar">
-          <span className="route-map-mode-bar__label">Path Colors:</span>
-          <div className="route-map-mode-bar__pills">
-            <button
-              type="button"
-              className={`route-map-mode-pill ${viewMode === "traffic" ? "route-map-mode-pill--active" : ""}`}
-              onClick={() => setViewMode("traffic")}
-              title="Color-code route paths by Distance Matrix traffic delays"
-            >
-              🚦 Traffic Delays
-            </button>
-            <button
-              type="button"
-              className={`route-map-mode-pill ${viewMode === "truck" ? "route-map-mode-pill--active" : ""}`}
-              onClick={() => setViewMode("truck")}
-              title="Color-code route paths by truck assignment"
-            >
-              🚚 By Truck
-            </button>
-          </div>
-        </div>
-      </div>
-
-      {/* Map Canvas */}
       <MapContainer
         center={[plan.depot.lat, plan.depot.lng]}
         zoom={8}
         className="route-map__canvas"
         scrollWheelZoom
+        fadeAnimation={false}
+        zoomAnimation={false}
       >
         <TileLayer
           attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
           url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+          opacity={1}
         />
+        <EnsureVisibleTiles />
         <FitBounds points={boundsPoints} />
-        <MapFocusController focusPoints={focusPoints} />
 
-        {/* Depot Marker */}
         <Marker position={[plan.depot.lat, plan.depot.lng]} icon={depotIcon()}>
           <Popup>
             <div className="route-map-popup">
@@ -342,114 +151,50 @@ export default function RouteMap({
           </Popup>
         </Marker>
 
-        {/* Route Polylines: rendered leg-by-leg for precision traffic color coding */}
         {routes.map((route) => {
           if (route.legs && route.legs.length > 0) {
             return route.legs.map((leg) => {
               if (leg.path.length === 0) return null;
-              const legColor = getLegColor(leg.delayLevel, viewMode, route.color);
-              const isSignificant = leg.delayLevel === "significant";
-              const isModerate = leg.delayLevel === "moderate";
 
               return (
-                <div key={`${route.segmentId}-leg-wrapper-${leg.legIndex}`}>
-                  {/* Outer alert glow halo for significant delays */}
-                  {isSignificant && (
-                    <Polyline
-                      positions={leg.path}
-                      smoothFactor={0.5}
-                      pathOptions={{
-                        color: TRAFFIC_COLORS.significantHalo,
-                        weight: isPreview ? 12 : 11,
-                        opacity: 0.95,
-                        lineCap: "round",
-                        lineJoin: "round",
-                      }}
-                    />
-                  )}
-
-                  {/* Core Leg Polyline */}
-                  <Polyline
-                    positions={leg.path}
-                    smoothFactor={0.5}
-                    pathOptions={{
-                      color: legColor,
-                      weight: isSignificant ? 5.5 : isModerate ? 4.5 : isPreview ? 4 : 4,
-                      opacity: isPreview ? 0.85 : 0.95,
-                      lineCap: "round",
-                      lineJoin: "round",
-                      dashArray: isSignificant ? "10 5" : isPreview ? "8 6" : undefined,
-                    }}
-                  >
-                    <Popup>
-                      <div className="route-map-leg-popup">
-                        <div className="route-map-leg-popup__header">
-                          <span
-                            className={`route-map-badge route-map-badge--${leg.delayLevel}`}
-                          >
-                            {leg.delayLevel === "significant"
-                              ? "⚠️ Significant Delay"
-                              : leg.delayLevel === "moderate"
-                              ? "⚡ Moderate Delay"
-                              : "🟢 Normal Flow"}
-                          </span>
-                          <span className="route-map-leg-popup__truck">{route.label}</span>
-                        </div>
-
-                        <div className="route-map-leg-popup__route">
-                          <strong>{leg.fromName}</strong>
-                          <span className="arrow">→</span>
-                          <strong>{leg.toName}</strong>
-                        </div>
-
+                <Polyline
+                  key={`${route.segmentId}-leg-${leg.legIndex}`}
+                  positions={leg.path}
+                  smoothFactor={0.5}
+                  pathOptions={{
+                    color: route.color,
+                    weight: 4,
+                    opacity: isPreview ? 0.85 : 0.92,
+                    lineCap: "round",
+                    lineJoin: "round",
+                    dashArray: isPreview ? "8 6" : undefined,
+                  }}
+                >
+                  <Popup>
+                    <div className="route-map-leg-popup">
+                      <div className="route-map-leg-popup__header">
+                        <span className="route-map-leg-popup__truck">{route.label}</span>
+                      </div>
+                      <div className="route-map-leg-popup__route">
+                        <strong>{leg.fromName}</strong>
+                        <span className="arrow">→</span>
+                        <strong>{leg.toName}</strong>
+                      </div>
+                      {leg.driveMinutes != null && (
                         <div className="route-map-leg-popup__metrics">
                           <div className="route-map-leg-popup__metric">
-                            <span className="label">Traffic Delay:</span>
-                            <span
-                              className={`value ${
-                                leg.delayLevel === "significant"
-                                  ? "value--severe"
-                                  : leg.delayLevel === "moderate"
-                                  ? "value--moderate"
-                                  : "value--normal"
-                              }`}
-                            >
-                              {leg.trafficMinutes != null && leg.trafficMinutes > 0
-                                ? `+${leg.trafficMinutes} min`
-                                : "0 min"}
-                            </span>
-                          </div>
-
-                          <div className="route-map-leg-popup__metric">
-                            <span className="label">In-Traffic Drive Time:</span>
-                            <span className="value">
-                              {leg.driveMinutes != null ? `${leg.driveMinutes} min` : "—"}
-                            </span>
-                          </div>
-
-                          <div className="route-map-leg-popup__metric">
-                            <span className="label">Typical Base Time:</span>
-                            <span className="value">
-                              {leg.baseMinutes != null ? `${leg.baseMinutes} min` : "—"}
-                            </span>
+                            <span className="label">Drive time:</span>
+                            <span className="value">{leg.driveMinutes} min</span>
                           </div>
                         </div>
-
-                        <div className="route-map-leg-popup__footer">
-                          <span>Source: Distance Matrix API</span>
-                          {isSignificant && (
-                            <span className="badge-tag badge-tag--alert">Action Needed</span>
-                          )}
-                        </div>
-                      </div>
-                    </Popup>
-                  </Polyline>
-                </div>
+                      )}
+                    </div>
+                  </Popup>
+                </Polyline>
               );
             });
           }
 
-          // Fallback if segment has no legs yet
           return route.path.length > 0 ? (
             <Polyline
               key={route.segmentId}
@@ -457,7 +202,7 @@ export default function RouteMap({
               smoothFactor={0.5}
               pathOptions={{
                 color: route.color,
-                weight: isPreview ? 4 : 4,
+                weight: 4,
                 opacity: isPreview ? 0.85 : 0.92,
                 lineCap: "round",
                 lineJoin: "round",
@@ -467,7 +212,6 @@ export default function RouteMap({
           ) : null;
         })}
 
-        {/* Stop Markers */}
         {routes.flatMap((route) =>
           route.stops.map(({ stop, sequence }) => (
             <Marker
@@ -493,83 +237,72 @@ export default function RouteMap({
         )}
       </MapContainer>
 
-      {/* Map Legend */}
       <div className="route-map__legend">
-        <span className="route-map__legend-depot">D = Scranton depot</span>
-
-        {/* Traffic Color Indicators */}
-        <div className="route-map__legend-traffic-group">
-          <span className="route-map__legend-item">
-            <span
-              className="route-map__legend-swatch"
-              style={{ background: TRAFFIC_COLORS.significant }}
-            />
-            Significant Delay (+8m+)
-          </span>
-          <span className="route-map__legend-item">
-            <span
-              className="route-map__legend-swatch"
-              style={{ background: TRAFFIC_COLORS.moderate }}
-            />
-            Moderate (+3–7m)
-          </span>
-          <span className="route-map__legend-item">
-            <span
-              className="route-map__legend-swatch"
-              style={{ background: TRAFFIC_COLORS.normal }}
-            />
-            Normal Flow (&lt;3m)
-          </span>
+        <div className="route-map__legend-row route-map__legend-row--meta">
+          <span className="route-map__legend-depot">D · Scranton depot</span>
+          {geometryLoading && (
+            <span className="route-map__legend-pill route-map__legend-pill--loading">Updating map…</span>
+          )}
+          {!geometryLoading && geometrySource === "google" && (
+            <span className="route-map__legend-pill">Road paths</span>
+          )}
+          {!geometryLoading && geometrySource === "estimated" && (
+            <span className="route-map__legend-pill route-map__legend-pill--muted">Straight-line</span>
+          )}
+          {!geometryLoading && trafficRefreshPending && !geometrySource && (
+            <span className="route-map__legend-pill route-map__legend-pill--muted">Paths not loaded</span>
+          )}
         </div>
 
-        {geometrySource === "google" && (
-          <span className="route-map__legend-traffic">
-            Road geometry · Google Distance Matrix API
-          </span>
-        )}
-        {geometrySource === "estimated" && (
-          <span className="route-map__legend-traffic">Straight-line fallback</span>
-        )}
-        {geometryLoading && (
-          <span className="route-map__legend-loading">Updating traffic data…</span>
-        )}
-        {onRefreshTraffic && plan.travelTimeSource === "google" && (
-          <div className="route-map__traffic-refresh">
-            {trafficRefreshPending && !geometrySource && (
-              <span className="route-map__legend-traffic route-map__legend-traffic--stale">
-                Live traffic not loaded — map uses straight-line paths until you refresh.
+        {routes.length > 0 && (
+          <div className="route-map__legend-row route-map__legend-row--segments">
+            {routes.map((route) => (
+              <span key={route.segmentId} className="route-map__legend-item">
+                <span className="route-map__legend-swatch" style={{ background: route.color }} />
+                {route.label}
               </span>
-            )}
+            ))}
+          </div>
+        )}
+
+        <div className="route-map__legend-row route-map__legend-row--actions">
+          {onRefreshTraffic && plan.travelTimeSource === "google" && (
             <button
               type="button"
-              className="route-map-btn route-map-btn--traffic"
+              className="route-map-btn route-map-btn--secondary"
               disabled={
                 routeLocked || pendingRouteOrder || refreshingTraffic || geometryLoading
               }
               title={
                 pendingRouteOrder
-                  ? "Apply stop order changes before refreshing traffic"
-                  : "Fetch live Google traffic for ETAs and road paths"
+                  ? "Apply stop order changes before refreshing the map"
+                  : "Fetch live traffic for ETAs and road paths"
               }
               onClick={onRefreshTraffic}
             >
-              {refreshingTraffic || geometryLoading ? "Refreshing traffic…" : "Refresh traffic & map"}
+              {refreshingTraffic || geometryLoading ? "Refreshing…" : "Refresh map"}
             </button>
-            {trafficRefreshError && (
-              <span className="route-map__legend-traffic route-map__legend-traffic--error">
-                {trafficRefreshError}
-              </span>
-            )}
-          </div>
+          )}
+          <button
+            type="button"
+            className="route-map-btn route-map-btn--primary"
+            disabled={exportingMapPdf || plan.allStops.length === 0}
+            title="Save a PDF of the current map with numbered stops"
+            onClick={() => {
+              setExportingMapPdf(true);
+              void generateMapPdf(plan, geometrySegments ?? null, {
+                useGeometry: !pendingRouteOrder,
+              })
+                .catch((err) => console.warn("Map PDF export failed:", err))
+                .finally(() => setExportingMapPdf(false));
+            }}
+          >
+            {exportingMapPdf ? "Building PDF…" : "Map PDF"}
+          </button>
+        </div>
+        {trafficRefreshError && (
+          <p className="route-map__legend-error">{trafficRefreshError}</p>
         )}
-
-        {/* Segment / Truck Labels */}
-        {routes.map((route) => (
-          <span key={route.segmentId} className="route-map__legend-item">
-            <span className="route-map__legend-swatch" style={{ background: route.color }} />
-            {route.label}
-          </span>
-        ))}
       </div>
     </div>
   );

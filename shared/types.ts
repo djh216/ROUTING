@@ -53,7 +53,29 @@ export interface Customer {
   lng: number;
   contactName: string;
   contactPhone: string;
+  /** Outfield export: contact email(s) */
+  contactEmail?: string;
   deliveryInstructions: string;
+  /** Outfield export: assigned team members */
+  teamMembers?: string;
+  /** Outfield Places LID */
+  outfieldLid?: string;
+  /** Outfield NA Payment Method (Places) */
+  paymentMethod?: string;
+}
+
+/** Editable customer database fields (Customer account modal). */
+export interface CustomerAccountUpdate {
+  name?: string;
+  address?: string;
+  city?: string;
+  contactName?: string;
+  contactPhone?: string;
+  contactEmail?: string;
+  deliveryInstructions?: string;
+  paymentMethod?: string;
+  teamMembers?: string;
+  outfieldLid?: string;
 }
 
 export interface CustomerUploadSummary {

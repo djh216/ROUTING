@@ -85,29 +85,25 @@ function resolveSegmentStops(
     .filter((s): s is Stop => !!s);
 }
 
-function segmentStartPoint(
-  segment: Segment,
-  depot: Depot,
-  previousLastStop?: Stop
-): LatLng | null {
+export function isOvernightSegmentStart(
+  startLocation: Segment["startLocation"]
+): boolean {
+  return startLocation === "overnight" || startLocation === "previous_stop";
+}
+
+function segmentStartPoint(segment: Segment, depot: Depot): LatLng | null {
   if (segment.startLocation === "Scranton") return { lat: depot.lat, lng: depot.lng };
-  if (
-    (segment.startLocation === "overnight" || segment.startLocation === "previous_stop") &&
-    previousLastStop
-  ) {
-    return { lat: previousLastStop.lat, lng: previousLastStop.lng };
-  }
+  // Overnight days: driver is already near the first stop — no deadhead from prior day.
   return null;
 }
 
 function buildSegmentWaypointsList(
   segment: Segment,
   stops: Stop[],
-  depot: Depot,
-  previousLastStop?: Stop
+  depot: Depot
 ): LatLng[] {
   const waypoints: LatLng[] = [];
-  const start = segmentStartPoint(segment, depot, previousLastStop);
+  const start = segmentStartPoint(segment, depot);
   if (start) waypoints.push(start);
 
   for (const stop of stops) {
@@ -136,7 +132,6 @@ export function buildSegmentWaypoints(
     : undefined;
 
   const segments: SegmentWaypoints[] = [];
-  let previousLastStop: Stop | undefined;
 
   for (const segment of plan.segments) {
     const stops = resolveSegmentStops(segment, stopMap, overrideMap);
@@ -144,9 +139,8 @@ export function buildSegmentWaypoints(
       segmentId: segment.id,
       label: segment.label,
       deliveryDate: segment.deliveryDate,
-      waypoints: buildSegmentWaypointsList(segment, stops, plan.depot, previousLastStop),
+      waypoints: buildSegmentWaypointsList(segment, stops, plan.depot),
     });
-    if (stops.length > 0) previousLastStop = stops[stops.length - 1];
   }
 
   return segments;

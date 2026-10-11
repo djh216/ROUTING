@@ -24,12 +24,12 @@ import {
   parseDeliveryTime,
   parseFormattedTimeToMinutes,
 } from "@shared/timeFormat";
+import { canRemoveEmptySegment } from "@shared/routeSegments";
 import { computeSegmentUpdate, type SegmentUpdate } from "../lib/segmentDrag";
 import { printRoutePdf } from "../lib/printRoute";
 import ContactDisplay from "./ContactDisplay";
 import AddStopPanel from "./AddStopPanel";
 import RoutePrintModal from "./RoutePrintModal";
-
 interface RouteBoardProps {
   plan: RoutePlan;
   pendingRouteOrder?: boolean;
@@ -45,6 +45,7 @@ interface RouteBoardProps {
   onWedThresholdChange?: (n: number) => void;
   onAddTruck?: () => void;
   onAddDay?: () => void;
+  onRemoveEmptySegment?: (segmentId: string) => void | Promise<void>;
   onDriveTimeChange?: (
     segmentId: string,
     stopId: string,
@@ -979,6 +980,9 @@ function SegmentColumn({
   onPrintPdf,
   onDeliveryInstructionsChange,
   onContactChange,
+  canRemoveEmpty,
+  onRemoveEmpty,
+  removingEmpty,
 }: {
   key?: Key;
   segment: Segment;
@@ -1010,6 +1014,9 @@ function SegmentColumn({
   onPrintPdf?: () => void;
   onDeliveryInstructionsChange?: (stopId: string, instructions: string) => void;
   onContactChange?: (stopId: string, contactName: string, contactPhone: string) => void;
+  canRemoveEmpty?: boolean;
+  onRemoveEmpty?: () => void;
+  removingEmpty?: boolean;
 }) {
   const stopIds = stops.map((s) => s.id);
   const v = segment.validation;
@@ -1032,6 +1039,21 @@ function SegmentColumn({
             </div>
           </div>
           <div className="segment-column__actions">
+            {canRemoveEmpty && onRemoveEmpty && !disabled && (
+              <button
+                type="button"
+                className="btn btn--secondary btn--compact segment-column__remove-empty"
+                disabled={removingEmpty}
+                onClick={onRemoveEmpty}
+                title={
+                  segment.segmentType === "day"
+                    ? "Remove this empty day from the route"
+                    : "Remove this empty truck from the route"
+                }
+              >
+                {removingEmpty ? "Removing…" : "Remove"}
+              </button>
+            )}
             {v.stopCount > 0 && (
               <button
                 type="button"
@@ -1328,6 +1350,7 @@ export default function RouteBoard({
   onWedThresholdChange,
   onAddTruck,
   onAddDay,
+  onRemoveEmptySegment,
   onDriveTimeChange,
   onServiceTimeChange,
   onFirstStopTimeChange,
@@ -1349,6 +1372,7 @@ export default function RouteBoard({
   const [flippingAll, setFlippingAll] = useState(false);
   const [swappingSegments, setSwappingSegments] = useState(false);
   const [printSegment, setPrintSegment] = useState<{ segment: Segment; stops: Stop[] } | null>(null);
+  const [removingEmptySegmentId, setRemovingEmptySegmentId] = useState<string | null>(null);
   const stopMap = useMemo(() => new Map(plan.allStops.map((s) => [s.id, s])), [plan.allStops]);
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
@@ -1525,6 +1549,16 @@ export default function RouteBoard({
       await onSwapSegments(segmentIdA, segmentIdB);
     } finally {
       setSwappingSegments(false);
+    }
+  }
+
+  async function handleRemoveEmptySegment(segmentId: string) {
+    if (!onRemoveEmptySegment) return;
+    setRemovingEmptySegmentId(segmentId);
+    try {
+      await onRemoveEmptySegment(segmentId);
+    } finally {
+      setRemovingEmptySegmentId(null);
     }
   }
 
@@ -1842,6 +1876,18 @@ export default function RouteBoard({
                 onPrintPdf={() => setPrintSegment({ segment, stops })}
                 onDeliveryInstructionsChange={onDeliveryInstructionsChange}
                 onContactChange={onContactChange}
+                canRemoveEmpty={
+                  !isLocked &&
+                  !pendingRouteOrder &&
+                  !!onRemoveEmptySegment &&
+                  canRemoveEmptySegment(plan, segment, segmentIndex)
+                }
+                onRemoveEmpty={
+                  onRemoveEmptySegment
+                    ? () => void handleRemoveEmptySegment(segment.id)
+                    : undefined
+                }
+                removingEmpty={removingEmptySegmentId === segment.id}
               />
             );
           })}

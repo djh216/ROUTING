@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import CustomerDatabaseDashboard from "./components/CustomerDatabaseDashboard";
 import CustomerUpload from "./components/CustomerUpload";
 import ManualOrderForm from "./components/ManualOrderForm";
 import OrderSelector from "./components/OrderSelector";
@@ -8,8 +9,10 @@ import RouteView from "./components/RouteView";
 import {
   addDay,
   addTruck,
+  removeEmptySegment,
   assignStopToDay,
   fetchBatches,
+  buildRoute,
   fetchRoutePlan,
   clearRouteOrders,
   lockRoute,
@@ -51,6 +54,11 @@ export default function App() {
   const [applyingRouteOrder, setApplyingRouteOrder] = useState(false);
   const [refreshingTraffic, setRefreshingTraffic] = useState(false);
   const [trafficRefreshError, setTrafficRefreshError] = useState<string | null>(null);
+  const [appView, setAppView] = useState<"routing" | "customers">(() =>
+    new URLSearchParams(window.location.search).get("view") === "routing"
+      ? "routing"
+      : "customers"
+  );
 
   const refreshMapGeometry = useCallback(() => {
     setMapGeometryRefreshKey((k) => k + 1);
@@ -105,8 +113,9 @@ export default function App() {
     fetchRoutePlan(selectedCycleId)
       .then((p) => {
         setPlan(p);
+        setError(null);
       })
-      .catch((e) => setError(e.message))
+      .catch((e) => setError(e instanceof Error ? e.message : "Failed to load route"))
       .finally(() => setLoading(false));
   }, [selectedCycleId]);
 
@@ -144,7 +153,7 @@ export default function App() {
     setApplyingRouteOrder(true);
     try {
       const restored = await fetchRoutePlan(selectedCycleId);
-      setPlan(restored);
+      setPlan(restored ?? null);
       setPendingRouteOrder(false);
       setPreviewSegments(null);
     } catch (e) {
@@ -182,6 +191,22 @@ export default function App() {
       setError(e instanceof Error ? e.message : "Failed to add Friday");
     }
   }, [selectedCycleId]);
+
+  const handleRemoveEmptySegment = useCallback(
+    async (segmentId: string) => {
+      if (!selectedCycleId) return;
+      try {
+        const updated = await removeEmptySegment(selectedCycleId, segmentId);
+        setPlan(updated);
+        setPendingRouteOrder(false);
+        setPreviewSegments(null);
+        setMapGeometryRefreshKey(0);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "Failed to remove empty truck or day");
+      }
+    },
+    [selectedCycleId]
+  );
 
   const handleReoptimizeSegment = useCallback(
     async (segmentId: string) => {
@@ -411,14 +436,9 @@ export default function App() {
     const nextId =
       cycleId && b.some((x) => x.cycleId === cycleId) ? cycleId : (b[0]?.cycleId ?? null);
     setSelectedCycleId(nextId);
-    if (!nextId) {
-      setPlan(null);
-      setPreviewSegments(null);
-      setActiveStopId(null);
-      return;
-    }
-    const updated = await fetchRoutePlan(nextId);
-    setPlan(updated);
+    setPlan(null);
+    setPreviewSegments(null);
+    setActiveStopId(null);
     setMapGeometryRefreshKey(0);
   }, []);
 
@@ -462,6 +482,24 @@ export default function App() {
     setOrderListKey((k) => k + 1);
   }, [refreshAfterOrderChange, selectedCycleId]);
 
+  const handleBuildRoute = useCallback(async () => {
+    if (!selectedCycleId) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const updated = await buildRoute(selectedCycleId);
+      setPlan(updated);
+      setPendingRouteOrder(false);
+      setPreviewSegments(null);
+      setActiveStopId(null);
+      setMapGeometryRefreshKey(0);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to build route");
+    } finally {
+      setLoading(false);
+    }
+  }, [selectedCycleId]);
+
   const handleReset = async () => {
     if (!selectedCycleId) return;
     const updated = await resetRoute(selectedCycleId);
@@ -494,17 +532,35 @@ export default function App() {
 
   return (
     <>
-    <div className="app">
+    <div className={`app${appView === "customers" ? " app--customers-view" : ""}`}>
       <header className="header">
         <div>
           <h1>F Magnotta Wines - Routing</h1>
         </div>
         <div className="header__actions">
+          <nav className="header__nav" aria-label="Main views">
+            <button
+              type="button"
+              className={`header__nav-btn${appView === "routing" ? " header__nav-btn--active" : ""}`}
+              onClick={() => setAppView("routing")}
+            >
+              Routes
+            </button>
+            <button
+              type="button"
+              className={`header__nav-btn${appView === "customers" ? " header__nav-btn--active" : ""}`}
+              onClick={() => setAppView("customers")}
+            >
+              Customer database
+            </button>
+          </nav>
           <button
             type="button"
             className="btn btn--secondary"
             onClick={handleReset}
-            disabled={!plan || plan.status === "locked" || pendingRouteOrder}
+            disabled={
+              appView !== "routing" || !plan || plan.status === "locked" || pendingRouteOrder
+            }
           >
             Reset to suggested
           </button>
@@ -517,7 +573,7 @@ export default function App() {
               type="button"
               className="btn btn--primary"
               onClick={() => void handleLock()}
-              disabled={!plan || pendingRouteOrder}
+              disabled={appView !== "routing" || !plan || pendingRouteOrder}
             >
               Lock route
             </button>
@@ -525,6 +581,19 @@ export default function App() {
         </div>
       </header>
 
+      {appView === "customers" ? (
+        <main className="main main--full customer-database-page">
+          <CustomerDatabaseDashboard
+            refreshKey={orderListKey}
+            onUploadComplete={() => {
+              handleCustomersLoaded();
+              void loadBatches();
+            }}
+            onOrdersApplied={() => void handleOrdersApplied()}
+          />
+        </main>
+      ) : (
+        <>
       <RouteTabs
         batches={batches}
         selectedCycleId={selectedCycleId}
@@ -638,6 +707,9 @@ export default function App() {
                   ? handleAddDay
                   : undefined
               }
+              onRemoveEmptySegment={
+                plan.status !== "locked" ? handleRemoveEmptySegment : undefined
+              }
               onDriveTimeChange={
                 plan.status !== "locked"
                   ? (segmentId, stopId, minutes) =>
@@ -692,15 +764,37 @@ export default function App() {
               }
             />
           </>
+        ) : selectedBatch ? (
+          <div className="main__empty">
+            <h2>{selectedBatch.territoryName}</h2>
+            <p>
+              {selectedBatch.orderCount} order{selectedBatch.orderCount !== 1 ? "s" : ""} ready for{" "}
+              {selectedBatch.deliveryDate}. Build a route when you are ready to plan stops and drive
+              times.
+            </p>
+            <button
+              type="button"
+              className="btn btn--primary main__build-route"
+              disabled={loading}
+              onClick={() => void handleBuildRoute()}
+            >
+              {loading ? "Building…" : "Build route"}
+            </button>
+          </div>
         ) : (
           <div className="main__empty">
             <h2>Route board</h2>
-            <p>Upload your weekly customer CSV, select accounts with orders, then apply to build routes.</p>
+            <p>
+              Add orders from the Customer database or sidebar, then choose a territory tab and build
+              a route manually.
+            </p>
           </div>
         )}
       </main>
+        </>
+      )}
     </div>
-    {plan && (
+    {plan && appView === "routing" && (
       <RoutePrintSheet plan={plan} batch={selectedBatch} />
     )}
     </>

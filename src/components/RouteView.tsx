@@ -22,6 +22,7 @@ interface RouteViewProps {
   onWedThresholdChange?: (n: number) => void;
   onAddTruck?: () => void;
   onAddDay?: () => void;
+  onRemoveEmptySegment?: (segmentId: string) => void;
   onDriveTimeChange?: (
     segmentId: string,
     stopId: string,
@@ -68,6 +69,7 @@ export default function RouteView({
   onWedThresholdChange,
   onAddTruck,
   onAddDay,
+  onRemoveEmptySegment,
   onDriveTimeChange,
   onFirstStopTimeChange,
   onServiceTimeChange,
@@ -127,6 +129,7 @@ export default function RouteView({
         onWedThresholdChange={onWedThresholdChange}
         onAddTruck={onAddTruck}
         onAddDay={onAddDay}
+        onRemoveEmptySegment={onRemoveEmptySegment}
         onDriveTimeChange={onDriveTimeChange}
         onFirstStopTimeChange={onFirstStopTimeChange}
         onServiceTimeChange={onServiceTimeChange}

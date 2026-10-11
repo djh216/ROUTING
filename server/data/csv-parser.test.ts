@@ -1,4 +1,11 @@
-import { parseContactPhoneField, parseCustomersCsv } from "./csv-parser.js";
+import {
+  parseContactEmailField,
+  parseContactPhoneField,
+  parseCustomersCsv,
+} from "./csv-parser.js";
+
+const e1 = parseContactEmailField("mailto:chef@example.com");
+if (e1 !== "chef@example.com") throw new Error(`Email parse failed: ${e1}`);
 
 // Phone + name parsing
 const p1 = parseContactPhoneField("Maria 215-555-0101");
@@ -51,6 +58,21 @@ if (p3.contactName !== "Chris" || p3.contactPhone !== "215-555-9999") {
 const p5 = parseContactPhoneField("215-555-0101 Maria");
 if (p5.contactName !== "Maria") throw new Error(`Name-after-phone parse failed: ${JSON.stringify(p5)}`);
 
+const pApprovals = parseContactPhoneField("approvals: 610-350-7502 Frank");
+if (pApprovals.contactName !== "Frank" || pApprovals.contactPhone !== "610-350-7502") {
+  throw new Error(`Approvals label parse failed: ${JSON.stringify(pApprovals)}`);
+}
+
+const pSpaced = parseContactPhoneField("267-259- 2456 Kyle");
+if (pSpaced.contactName !== "Kyle" || pSpaced.contactPhone !== "267-259-2456") {
+  throw new Error(`Spaced phone parse failed: ${JSON.stringify(pSpaced)}`);
+}
+
+const pMainOnly = parseContactPhoneField("main: Erica");
+if (pMainOnly.contactName !== "Erica" || pMainOnly.contactPhone !== "") {
+  throw new Error(`Name-only phone field failed: ${JSON.stringify(pMainOnly)}`);
+}
+
 const csvCombinedHeader = `name,street 1 (Address - Street 1),City(Address - City),Name and Phone Numbers,Delivery instructions(specific delivery instructions for that restaurant),Territory(Which Territory the restaurant is in)
 Combined Bistro,3 Pine St,Philadelphia,Ana 215-555-8888,Front door,Philadelphia
 `;
@@ -67,5 +89,23 @@ const split = await parseCustomersCsv(csvSeparateContact, new Date("2026-09-10T1
 if (split.errors.length > 0) throw new Error(split.errors.join("; "));
 if (split.customers[0].contactName !== "Jordan Lee") throw new Error("Separate contact name column failed");
 if (split.customers[0].contactPhone !== "215-555-7777") throw new Error("Separate phone format failed");
+
+const csvOutfield = `Name,Street 1,City,Phone Numbers,Emails,Team Members,Delivery Instructions (Places),LID (Places),NA Payment Method (Places),Territory (Places)
+Outfield Test,1 Main St,Philadelphia,Tom 215-555-9999,tom@example.com,David Hall and Jordan Fuller,Side door,62039,Credit Card,Philadelphia
+PW Bistro,611 Righters Ferry Rd,Bala Cynwyd,Christine : 484.434.8766 RJ,,David Hall and Suzanne Roth,Rear ramp,62129,,PW
+`;
+
+const outfield = await parseCustomersCsv(csvOutfield, new Date("2026-09-10T12:00:00"));
+if (outfield.errors.length > 0) throw new Error(outfield.errors.join("; "));
+if (outfield.customers.length !== 2) throw new Error("Expected 2 Outfield rows");
+const philly = outfield.customers.find((c) => c.name === "Outfield Test");
+if (!philly?.teamMembers?.includes("Jordan Fuller")) throw new Error("Team members missing");
+if (philly.outfieldLid !== "62039" || philly.paymentMethod !== "Credit Card") {
+  throw new Error("Outfield LID/payment not parsed");
+}
+if (philly.contactEmail !== "tom@example.com") throw new Error("Outfield email not parsed");
+const pw = outfield.customers.find((c) => c.name === "PW Bistro");
+if (pw?.territoryId !== "western-philly") throw new Error("PW territory alias failed");
+if (pw.contactName !== "Christine") throw new Error("Outfield phone parse failed");
 
 console.log("CSV parser tests passed.");
