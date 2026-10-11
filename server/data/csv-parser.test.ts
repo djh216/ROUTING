@@ -3,6 +3,7 @@ import {
   parseContactPhoneField,
   parseCustomersCsv,
 } from "./csv-parser.js";
+import { sanitizeTeamMembers } from "../../shared/teamMembers.js";
 
 const e1 = parseContactEmailField("mailto:chef@example.com");
 if (e1 !== "chef@example.com") throw new Error(`Email parse failed: ${e1}`);
@@ -100,11 +101,18 @@ if (outfield.errors.length > 0) throw new Error(outfield.errors.join("; "));
 if (outfield.customers.length !== 2) throw new Error("Expected 2 Outfield rows");
 const philly = outfield.customers.find((c) => c.name === "Outfield Test");
 if (!philly?.teamMembers?.includes("Jordan Fuller")) throw new Error("Team members missing");
+if (philly.teamMembers?.toLowerCase().includes("david hall")) {
+  throw new Error("David Hall should not appear in team members");
+}
 if (philly.outfieldLid !== "62039" || philly.paymentMethod !== "Credit Card") {
   throw new Error("Outfield LID/payment not parsed");
 }
 if (philly.contactEmail !== "tom@example.com") throw new Error("Outfield email not parsed");
 const pw = outfield.customers.find((c) => c.name === "PW Bistro");
+if (pw?.teamMembers !== "Suzanne Roth") throw new Error("Expected David Hall stripped from PW team");
+if (sanitizeTeamMembers("Angela Riccetti and David Hall") !== "Angela Riccetti") {
+  throw new Error("Trailing David Hall not stripped");
+}
 if (pw?.territoryId !== "western-philly") throw new Error("PW territory alias failed");
 if (pw.contactName !== "Christine") throw new Error("Outfield phone parse failed");
 

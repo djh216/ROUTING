@@ -17,6 +17,160 @@ export const MAP_EXPORT_WIDTH = 1064;
 export const MAP_EXPORT_HEIGHT = 520;
 export const MAP_EXPORT_ASPECT = MAP_EXPORT_WIDTH / MAP_EXPORT_HEIGHT;
 
+const OSM_TILE_SIZE = 256;
+const OSM_TILE_URL = "https://tile.openstreetmap.org/{z}/{x}/{y}.png";
+
+type MercatorView = {
+  zoom: number;
+  offsetX: number;
+  offsetY: number;
+  worldMinX: number;
+  worldMinY: number;
+  worldMaxX: number;
+  worldMaxY: number;
+  project: (lat: number, lng: number) => [number, number];
+};
+
+function latLngToWorldPx(lat: number, lng: number, zoom: number): [number, number] {
+  const scale = OSM_TILE_SIZE * 2 ** zoom;
+  const x = ((lng + 180) / 360) * scale;
+  const sinLat = Math.sin((lat * Math.PI) / 180);
+  const y = (0.5 - Math.log((1 + sinLat) / (1 - sinLat)) / (4 * Math.PI)) * scale;
+  return [x, y];
+}
+
+function pickMercatorView(
+  points: LatLng[],
+  width: number,
+  height: number,
+  padding: number
+): MercatorView | null {
+  if (points.length === 0) return null;
+
+  const innerW = width - padding * 2;
+  const innerH = height - padding * 2;
+
+  for (let zoom = 15; zoom >= 5; zoom--) {
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    for (const [lat, lng] of points) {
+      const [x, y] = latLngToWorldPx(lat, lng, zoom);
+      minX = Math.min(minX, x);
+      minY = Math.min(minY, y);
+      maxX = Math.max(maxX, x);
+      maxY = Math.max(maxY, y);
+    }
+    const spanX = maxX - minX;
+    const spanY = maxY - minY;
+    if (spanX <= innerW && spanY <= innerH) {
+      const offsetX = padding + (innerW - spanX) / 2 - minX;
+      const offsetY = padding + (innerH - spanY) / 2 - minY;
+      return {
+        zoom,
+        offsetX,
+        offsetY,
+        worldMinX: minX,
+        worldMinY: minY,
+        worldMaxX: maxX,
+        worldMaxY: maxY,
+        project(lat: number, lng: number) {
+          const [wx, wy] = latLngToWorldPx(lat, lng, zoom);
+          return [offsetX + wx, offsetY + wy];
+        },
+      };
+    }
+  }
+
+  const zoom = 5;
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (const [lat, lng] of points) {
+    const [x, y] = latLngToWorldPx(lat, lng, zoom);
+    minX = Math.min(minX, x);
+    minY = Math.min(minY, y);
+    maxX = Math.max(maxX, x);
+    maxY = Math.max(maxY, y);
+  }
+  const spanX = maxX - minX;
+  const spanY = maxY - minY;
+  const offsetX = padding + (innerW - spanX) / 2 - minX;
+  const offsetY = padding + (innerH - spanY) / 2 - minY;
+  return {
+    zoom,
+    offsetX,
+    offsetY,
+    worldMinX: minX,
+    worldMinY: minY,
+    worldMaxX: maxX,
+    worldMaxY: maxY,
+    project(lat: number, lng: number) {
+      const [wx, wy] = latLngToWorldPx(lat, lng, zoom);
+      return [offsetX + wx, offsetY + wy];
+    },
+  };
+}
+
+function loadOsmTile(z: number, x: number, y: number): Promise<HTMLImageElement | null> {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    img.onload = () => resolve(img);
+    img.onerror = () => resolve(null);
+    img.src = OSM_TILE_URL.replace("{z}", String(z))
+      .replace("{x}", String(x))
+      .replace("{y}", String(y));
+  });
+}
+
+async function paintOsmTileBackground(
+  ctx: CanvasRenderingContext2D,
+  view: MercatorView
+): Promise<void> {
+  const padTiles = 1;
+  const tMinX = Math.floor(view.worldMinX / OSM_TILE_SIZE) - padTiles;
+  const tMaxX = Math.floor(view.worldMaxX / OSM_TILE_SIZE) + padTiles;
+  const tMinY = Math.floor(view.worldMinY / OSM_TILE_SIZE) - padTiles;
+  const tMaxY = Math.floor(view.worldMaxY / OSM_TILE_SIZE) + padTiles;
+  const n = 2 ** view.zoom;
+  const maxTile = n - 1;
+
+  const jobs: Promise<void>[] = [];
+  for (let tx = tMinX; tx <= tMaxX; tx++) {
+    if (tx < 0 || tx > maxTile) continue;
+    for (let ty = tMinY; ty <= tMaxY; ty++) {
+      if (ty < 0 || ty > maxTile) continue;
+      jobs.push(
+        loadOsmTile(view.zoom, tx, ty).then((img) => {
+          if (!img) return;
+          const x = view.offsetX + tx * OSM_TILE_SIZE;
+          const y = view.offsetY + ty * OSM_TILE_SIZE;
+          ctx.drawImage(img, x, y, OSM_TILE_SIZE, OSM_TILE_SIZE);
+        })
+      );
+    }
+  }
+  await Promise.all(jobs);
+}
+
+function drawOsmAttribution(ctx: CanvasRenderingContext2D, width: number, height: number) {
+  const text = "© OpenStreetMap contributors";
+  ctx.font = "10px Helvetica, Arial, sans-serif";
+  const pad = 8;
+  const textW = ctx.measureText(text).width;
+  const x = width - textW - pad - 6;
+  const y = height - pad - 4;
+  ctx.fillStyle = "rgba(255, 255, 255, 0.88)";
+  ctx.fillRect(x - 4, y - 12, textW + 8, 16);
+  ctx.fillStyle = "#334155";
+  ctx.textAlign = "left";
+  ctx.textBaseline = "bottom";
+  ctx.fillText(text, x, y);
+}
+
 function pointsNear(a: LatLng, b: LatLng): boolean {
   return Math.abs(a[0] - b[0]) < 1e-5 && Math.abs(a[1] - b[1]) < 1e-5;
 }
@@ -317,25 +471,30 @@ function collectBoundsPoints(
   return points;
 }
 
-function renderSegmentCanvas(
+async function renderSegmentCanvas(
   plan: RoutePlan,
   segment: Segment,
   route: SegmentRoute,
   geometrySegments: GeometryMap,
   useGeometry: boolean,
   width: number,
-  height: number
-): string | null {
+  height: number,
+  options?: { includeDepot?: boolean; includeOsmBackground?: boolean }
+): Promise<string | null> {
   if (route.stops.length === 0) return null;
+
+  const includeDepot = options?.includeDepot !== false;
+  const includeOsmBackground = options?.includeOsmBackground !== false;
 
   const polyline = getSegmentPolyline(
     plan,
     segment.id,
     route,
     geometrySegments,
-    useGeometry
+    useGeometry,
+    { includeDepot }
   );
-  const boundsPoints = collectBoundsPoints(plan, polyline, route, true);
+  const boundsPoints = collectBoundsPoints(plan, polyline, route, includeDepot);
 
   const canvas = document.createElement("canvas");
   canvas.width = width;
@@ -343,20 +502,33 @@ function renderSegmentCanvas(
   const ctx = canvas.getContext("2d");
   if (!ctx) return null;
 
-  ctx.fillStyle = "#ffffff";
+  ctx.fillStyle = "#e2e8f0";
   ctx.fillRect(0, 0, width, height);
-  const inset = 12;
-  ctx.fillStyle = "#f8fafc";
-  ctx.fillRect(inset, inset, width - inset * 2, height - inset * 2);
 
-  const { project } = projectPoints(boundsPoints, width, height, 40);
+  const padding = 40;
+  const mercatorView = includeOsmBackground
+    ? pickMercatorView(boundsPoints, width, height, padding)
+    : null;
+  const project =
+    mercatorView?.project ??
+    projectPoints(boundsPoints, width, height, padding).project;
+
+  if (mercatorView) {
+    await paintOsmTileBackground(ctx, mercatorView);
+    drawOsmAttribution(ctx, width, height);
+  } else {
+    const inset = 12;
+    ctx.fillStyle = "#f8fafc";
+    ctx.fillRect(inset, inset, width - inset * 2, height - inset * 2);
+  }
+
   const drawPaths = getSegmentDrawPolylines(plan, segment.id, route, useGeometry, {
-    includeDepot: true,
+    includeDepot,
   });
   for (const path of drawPaths) {
     drawPolyline(ctx, path, route.color, project);
   }
-  drawStartMarker(ctx, plan, segment, project, true);
+  drawStartMarker(ctx, plan, segment, project, includeDepot);
   drawStops(ctx, route, project);
 
   drawMapLabel(ctx, route.label, route.color, width);
@@ -365,7 +537,7 @@ function renderSegmentCanvas(
 }
 
 /** Map image for one day/truck segment (manifest PDF). */
-export function renderSegmentMapToDataUrl(
+export async function renderSegmentMapToDataUrl(
   plan: RoutePlan,
   segmentId: string,
   geometrySegments: GeometryMap,
@@ -374,8 +546,10 @@ export function renderSegmentMapToDataUrl(
     height?: number;
     /** When false, use stop/waypoint chain (e.g. pending order or stale geometry). */
     useGeometry?: boolean;
+    includeDepot?: boolean;
+    includeOsmBackground?: boolean;
   }
-): string | null {
+): Promise<string | null> {
   const routes = buildSegmentRoutes(plan, null, options?.useGeometry === false ? null : geometrySegments, {
     freezeRoutePaths: plan.manualTruckAssignment === true,
   });
@@ -390,12 +564,16 @@ export function renderSegmentMapToDataUrl(
     geometrySegments,
     options?.useGeometry !== false,
     options?.width ?? MAP_EXPORT_WIDTH,
-    options?.height ?? MAP_EXPORT_HEIGHT
+    options?.height ?? MAP_EXPORT_HEIGHT,
+    {
+      includeDepot: options?.includeDepot,
+      includeOsmBackground: options?.includeOsmBackground,
+    }
   );
 }
 
 /** Map image for the full plan (all segments). */
-export function renderPlanMapToDataUrl(
+export async function renderPlanMapToDataUrl(
   plan: RoutePlan,
   geometrySegments: GeometryMap,
   options?: {
@@ -404,14 +582,17 @@ export function renderPlanMapToDataUrl(
     useGeometry?: boolean;
     /** When false, omit Scranton depot marker, depot legs, and depot from map bounds. */
     includeDepot?: boolean;
+    /** Draw OpenStreetMap tiles under routes (matches live map). */
+    includeOsmBackground?: boolean;
   }
-): string | null {
+): Promise<string | null> {
   if (plan.allStops.length === 0) return null;
 
   const width = options?.width ?? MAP_EXPORT_WIDTH;
   const height = options?.height ?? MAP_EXPORT_HEIGHT;
   const useGeometry = options?.useGeometry !== false;
   const includeDepot = options?.includeDepot !== false;
+  const includeOsmBackground = options?.includeOsmBackground !== false;
   const routes = buildSegmentRoutes(plan, null, useGeometry ? geometrySegments : null, {
     freezeRoutePaths: plan.manualTruckAssignment === true,
   });
@@ -422,11 +603,8 @@ export function renderPlanMapToDataUrl(
   const ctx = canvas.getContext("2d");
   if (!ctx) return null;
 
-  ctx.fillStyle = "#ffffff";
+  ctx.fillStyle = "#e2e8f0";
   ctx.fillRect(0, 0, width, height);
-  const inset = 12;
-  ctx.fillStyle = "#f8fafc";
-  ctx.fillRect(inset, inset, width - inset * 2, height - inset * 2);
 
   const allBounds: LatLng[] = includeDepot ? [[plan.depot.lat, plan.depot.lng]] : [];
   for (const route of routes) {
@@ -446,7 +624,20 @@ export function renderPlanMapToDataUrl(
     allBounds.push([plan.depot.lat, plan.depot.lng]);
   }
 
-  const { project } = projectPoints(allBounds, width, height, 40);
+  const padding = 40;
+  const mercatorView = includeOsmBackground ? pickMercatorView(allBounds, width, height, padding) : null;
+  const project =
+    mercatorView?.project ??
+    projectPoints(allBounds, width, height, padding).project;
+
+  if (mercatorView) {
+    await paintOsmTileBackground(ctx, mercatorView);
+    drawOsmAttribution(ctx, width, height);
+  } else {
+    const inset = 12;
+    ctx.fillStyle = "#f8fafc";
+    ctx.fillRect(inset, inset, width - inset * 2, height - inset * 2);
+  }
 
   for (const route of routes) {
     const segment = plan.segments.find((s) => s.id === route.segmentId);

@@ -73,8 +73,8 @@ export const ORDERS: Order[] = [
   { id: "o16", customerId: "c12", territoryId: "northeast-pa", cycleId: "lehigh-northeast-fri", cases: 14, approvedAt: "2026-09-10T12:00:00", status: "approved" },
   { id: "o17", customerId: "c13", territoryId: "lehigh-valley", cycleId: "lehigh-northeast-fri", cases: 11, approvedAt: "2026-09-10T11:00:00", status: "approved" },
   { id: "o18", customerId: "c14", territoryId: "lehigh-valley", cycleId: "lehigh-northeast-fri", cases: 7, approvedAt: "2026-09-10T13:00:00", status: "approved" },
-  { id: "o19", customerId: "c15", territoryId: "northern-susquehanna", cycleId: "northern-susquehanna", cases: 13, approvedAt: "2026-09-10T14:00:00", status: "approved" },
-  { id: "o20", customerId: "c16", territoryId: "northern-susquehanna", cycleId: "northern-susquehanna", cases: 9, approvedAt: "2026-09-10T09:30:00", status: "approved" },
+  { id: "o19", customerId: "c15", territoryId: "northern-susquehanna", cycleId: "lehigh-northeast-fri", cases: 13, approvedAt: "2026-09-10T14:00:00", status: "approved" },
+  { id: "o20", customerId: "c16", territoryId: "northern-susquehanna", cycleId: "lehigh-northeast-fri", cases: 9, approvedAt: "2026-09-10T09:30:00", status: "approved" },
 ];
 
 export function getCustomerById(id: string): Customer | undefined {

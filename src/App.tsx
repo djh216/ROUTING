@@ -59,6 +59,7 @@ export default function App() {
       ? "routing"
       : "customers"
   );
+  const [highlightRoutesNav, setHighlightRoutesNav] = useState(false);
 
   const refreshMapGeometry = useCallback(() => {
     setMapGeometryRefreshKey((k) => k + 1);
@@ -442,11 +443,15 @@ export default function App() {
     setMapGeometryRefreshKey(0);
   }, []);
 
-  const handleOrdersApplied = useCallback(async () => {
-    await refreshAfterOrderChange(selectedCycleId);
-    setOrderListKey((k) => k + 1);
-    handleCustomersLoaded();
-  }, [refreshAfterOrderChange, selectedCycleId, handleCustomersLoaded]);
+  const handleOrdersApplied = useCallback(
+    async (addedToRouteCycleId?: string) => {
+      if (addedToRouteCycleId) setHighlightRoutesNav(true);
+      await refreshAfterOrderChange(addedToRouteCycleId ?? selectedCycleId);
+      setOrderListKey((k) => k + 1);
+      handleCustomersLoaded();
+    },
+    [refreshAfterOrderChange, selectedCycleId, handleCustomersLoaded]
+  );
 
   const handleRemoveStop = useCallback(
     async (customerId: string) => {
@@ -534,26 +539,38 @@ export default function App() {
     <>
     <div className={`app${appView === "customers" ? " app--customers-view" : ""}`}>
       <header className="header">
-        <div>
+        <div className="header__brand">
           <h1>F Magnotta Wines - Routing</h1>
         </div>
+        <nav className="header__nav" aria-label="Main views">
+          <button
+            type="button"
+            className={[
+              "header__nav-btn",
+              appView === "routing" ? "header__nav-btn--active" : "",
+              highlightRoutesNav && appView !== "routing" ? "header__nav-btn--highlight" : "",
+            ]
+              .filter(Boolean)
+              .join(" ")}
+            onClick={() => {
+              setHighlightRoutesNav(false);
+              setAppView("routing");
+            }}
+          >
+            Routes
+          </button>
+          <button
+            type="button"
+            className={`header__nav-btn${appView === "customers" ? " header__nav-btn--active" : ""}`}
+            onClick={() => {
+              setHighlightRoutesNav(false);
+              setAppView("customers");
+            }}
+          >
+            Customer database
+          </button>
+        </nav>
         <div className="header__actions">
-          <nav className="header__nav" aria-label="Main views">
-            <button
-              type="button"
-              className={`header__nav-btn${appView === "routing" ? " header__nav-btn--active" : ""}`}
-              onClick={() => setAppView("routing")}
-            >
-              Routes
-            </button>
-            <button
-              type="button"
-              className={`header__nav-btn${appView === "customers" ? " header__nav-btn--active" : ""}`}
-              onClick={() => setAppView("customers")}
-            >
-              Customer database
-            </button>
-          </nav>
           <button
             type="button"
             className="btn btn--secondary"
@@ -585,11 +602,12 @@ export default function App() {
         <main className="main main--full customer-database-page">
           <CustomerDatabaseDashboard
             refreshKey={orderListKey}
+            defaultRouteCycleId={selectedCycleId}
             onUploadComplete={() => {
               handleCustomersLoaded();
               void loadBatches();
             }}
-            onOrdersApplied={() => void handleOrdersApplied()}
+            onOrdersApplied={(routeId) => void handleOrdersApplied(routeId)}
           />
         </main>
       ) : (

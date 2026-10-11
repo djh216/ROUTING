@@ -13,8 +13,10 @@ interface CustomerUploadProps {
   refreshKey?: number;
   /** Section heading; omit for no title */
   title?: string;
-  /** Sidebar stack vs horizontal toolbar (customer database page) */
-  layout?: "sidebar" | "inline";
+  /** Sidebar stack, wide inline row, or compact header toolbar */
+  layout?: "sidebar" | "inline" | "header";
+  /** Hide loaded-account status (shown elsewhere on the page) */
+  hideLoadedStatus?: boolean;
 }
 
 export default function CustomerUpload({
@@ -23,6 +25,7 @@ export default function CustomerUpload({
   refreshKey = 0,
   title = "Weekly customers",
   layout = "sidebar",
+  hideLoadedStatus = false,
 }: CustomerUploadProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [uploading, setUploading] = useState(false);
@@ -93,9 +96,16 @@ export default function CustomerUpload({
     }
   }
 
+  const layoutClass =
+    layout === "header"
+      ? " customer-upload--header"
+      : layout === "inline"
+        ? " customer-upload--inline"
+        : "";
+
   return (
-    <section className={`customer-upload${layout === "inline" ? " customer-upload--inline" : ""}`}>
-      {title ? <h2>{title}</h2> : null}
+    <section className={`customer-upload${layoutClass}`}>
+      {title && layout !== "header" ? <h2>{title}</h2> : null}
 
       <input
         ref={inputRef}
@@ -112,7 +122,7 @@ export default function CustomerUpload({
       <div className="customer-upload__actions">
         <button
           type="button"
-          className="btn btn--primary btn--block"
+          className={`btn btn--primary${layout === "header" ? " btn--compact" : " btn--block"}`}
           disabled={uploading}
           onClick={() => inputRef.current?.click()}
         >
@@ -122,25 +132,25 @@ export default function CustomerUpload({
           <>
             <button
               type="button"
-              className="btn btn--secondary btn--block"
+              className={`btn btn--secondary${layout === "header" ? " btn--compact" : " btn--block"}`}
               disabled={uploading}
               onClick={() => void handleRegeocode()}
             >
-              Re-geocode addresses
+              {layout === "header" ? "Re-geocode" : "Re-geocode addresses"}
             </button>
             <button
               type="button"
-              className="btn btn--secondary btn--block"
+              className={`btn btn--secondary${layout === "header" ? " btn--compact" : " btn--block"}`}
               disabled={uploading}
               onClick={() => void handleClear()}
             >
-              Clear uploaded data
+              {layout === "header" ? "Clear data" : "Clear uploaded data"}
             </button>
           </>
         )}
       </div>
 
-      {status && status.customerCount > 0 && (
+      {status && status.customerCount > 0 && !hideLoadedStatus && (
         <p className="customer-upload__status">
           {status.filename ? `${status.filename}: ` : ""}
           {status.customerCount} accounts loaded

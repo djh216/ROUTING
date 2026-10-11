@@ -3,10 +3,18 @@ import {
   addOrderSelections,
   applyOrderSelection,
   fetchCustomerList,
+  fetchTerritoryCycles,
   fetchUploadStatus,
 } from "../lib/api";
 import { MIN_ORDER_CASES } from "@shared/constants";
-import type { CustomerListItem, CustomerUploadSummary } from "@shared/types";
+import type { CustomerListItem, CustomerUploadSummary, TerritoryCycle } from "@shared/types";
+import {
+  compatibleDeliveryRoutes,
+  cycleIncludesTerritory,
+  defaultCycleForTerritory,
+  defaultRouteAmong,
+  routeOptionsForPicker,
+} from "../lib/deliveryRoutes";
 import ContactDisplay from "./ContactDisplay";
 import CustomerAccountModal from "./CustomerAccountModal";
 import CustomerUpload from "./CustomerUpload";
@@ -15,12 +23,16 @@ type SelectionState = Record<string, { selected: boolean; cycle: number }>;
 
 interface CustomerDatabaseDashboardProps {
   refreshKey?: number;
+  /** Route tab selected on the Routing view — used as default when adding orders. */
+  defaultRouteCycleId?: string | null;
   onUploadComplete?: () => void;
-  onOrdersApplied?: () => void;
+  /** Optional route id when accounts were just added to that delivery route. */
+  onOrdersApplied?: (addedToRouteCycleId?: string) => void;
 }
 
 export default function CustomerDatabaseDashboard({
   refreshKey = 0,
+  defaultRouteCycleId = null,
   onUploadComplete,
   onOrdersApplied,
 }: CustomerDatabaseDashboardProps) {
@@ -36,19 +48,25 @@ export default function CustomerDatabaseDashboard({
   const [orderNotice, setOrderNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [detailCustomer, setDetailCustomer] = useState<CustomerListItem | null>(null);
+  const [deliveryRoutes, setDeliveryRoutes] = useState<TerritoryCycle[]>([]);
+  const [targetRouteId, setTargetRouteId] = useState("");
 
   const load = useCallback(() => {
     setLoading(true);
     setError(null);
-    Promise.all([fetchUploadStatus(), fetchCustomerList()])
-      .then(([uploadStatus, list]) => {
+    Promise.all([fetchUploadStatus(), fetchCustomerList(), fetchTerritoryCycles()])
+      .then(([uploadStatus, list, routes]) => {
         setStatus(uploadStatus);
         setCustomers(list);
+        setDeliveryRoutes(routes);
+        const ref = new Date();
         const initial: SelectionState = {};
         for (const c of list) {
           initial[c.id] = {
             selected: false,
-            cycle: c.cycle ?? 1,
+            cycle: c.hasOrder
+              ? (c.cycle ?? 1)
+              : (c.cycle ?? defaultCycleForTerritory(routes, c.territoryId, ref)),
           };
         }
         setSelection(initial);
@@ -85,10 +103,41 @@ export default function CustomerDatabaseDashboard({
     });
   }, [customers, territoryFilter, search]);
 
-  const selectedCount = useMemo(
-    () => customers.filter((c) => !c.hasOrder && selection[c.id]?.selected).length,
+  const selectedToAdd = useMemo(
+    () => customers.filter((c) => !c.hasOrder && selection[c.id]?.selected),
     [customers, selection]
   );
+
+  const selectedCount = selectedToAdd.length;
+
+  const routeOptions = useMemo(
+    () => routeOptionsForPicker(deliveryRoutes),
+    [deliveryRoutes]
+  );
+
+  const incompatibleForRoute = useMemo(() => {
+    if (!targetRouteId || selectedToAdd.length === 0) return [];
+    const route = deliveryRoutes.find((r) => r.id === targetRouteId);
+    if (!route) return selectedToAdd;
+    return selectedToAdd.filter((c) => !cycleIncludesTerritory(route, c.territoryId));
+  }, [targetRouteId, selectedToAdd, deliveryRoutes]);
+
+  useEffect(() => {
+    if (selectedCount === 0) {
+      setTargetRouteId("");
+      return;
+    }
+    setTargetRouteId((prev) => {
+      if (prev && routeOptions.some((r) => r.id === prev)) return prev;
+      if (defaultRouteCycleId && routeOptions.some((r) => r.id === defaultRouteCycleId)) {
+        return defaultRouteCycleId;
+      }
+      const compatible = compatibleDeliveryRoutes(deliveryRoutes, selectedToAdd);
+      const nearest = defaultRouteAmong(compatible, new Date());
+      if (nearest) return nearest;
+      return prev;
+    });
+  }, [selectedCount, routeOptions, defaultRouteCycleId, deliveryRoutes, selectedToAdd]);
 
   const selectedAnyCount = useMemo(
     () => customers.filter((c) => selection[c.id]?.selected).length,
@@ -108,13 +157,6 @@ export default function CustomerDatabaseDashboard({
     }));
     setOrderError(null);
     setOrderNotice(null);
-  }
-
-  function setCycle(id: string, cycle: number) {
-    setSelection((prev) => ({
-      ...prev,
-      [id]: { ...prev[id], selected: prev[id]?.selected ?? false, cycle },
-    }));
   }
 
   function selectFiltered() {
@@ -154,6 +196,7 @@ export default function CustomerDatabaseDashboard({
         .map((c) => ({
           customerId: c.id,
           cases: c.cases > 0 ? c.cases : MIN_ORDER_CASES,
+          cycleId: c.orderCycleId,
           cycle: c.cycle ?? 1,
         }));
       const result = await applyOrderSelection(remaining);
@@ -178,16 +221,26 @@ export default function CustomerDatabaseDashboard({
     setOrderError(null);
     setOrderNotice(null);
     try {
-      const selections = customers
-        .filter((c) => !c.hasOrder && selection[c.id]?.selected)
-        .map((c) => ({
-          customerId: c.id,
-          cases: MIN_ORDER_CASES,
-          cycle: selection[c.id]?.cycle ?? c.cycle ?? 1,
-        }));
+      if (!targetRouteId) {
+        setOrderError("Choose a route to add these accounts to.");
+        return;
+      }
+      if (incompatibleForRoute.length > 0) {
+        const routeName =
+          deliveryRoutes.find((r) => r.id === targetRouteId)?.name ?? targetRouteId;
+        setOrderError(
+          `${incompatibleForRoute.length} selected account${incompatibleForRoute.length !== 1 ? "s" : ""} cannot go on ${routeName}. Change the selection or pick another route.`
+        );
+        return;
+      }
+
+      const selections = selectedToAdd.map((c) => ({
+        customerId: c.id,
+        cases: MIN_ORDER_CASES,
+      }));
       if (selections.length === 0) return;
 
-      const result = await addOrderSelections(selections);
+      const result = await addOrderSelections(selections, targetRouteId);
       if (result.errors.length > 0) {
         setOrderError(result.errors.join(" · "));
         return;
@@ -208,7 +261,7 @@ export default function CustomerDatabaseDashboard({
         return next;
       });
       load();
-      onOrdersApplied?.();
+      onOrdersApplied?.(targetRouteId);
     } catch (e) {
       setOrderError(e instanceof Error ? e.message : "Failed to update orders");
     } finally {
@@ -219,40 +272,38 @@ export default function CustomerDatabaseDashboard({
   return (
     <div className="customer-database">
       <header className="customer-database__header">
-        <div>
-          <h2>Customer information database</h2>
-          <p className="customer-database__meta">
-            {status?.filename ? `${status.filename} · ` : ""}
-            {customers.length} account{customers.length !== 1 ? "s" : ""}
-            {status?.orderCount != null && status.orderCount > 0
-              ? ` · ${status.orderCount} active order${status.orderCount !== 1 ? "s" : ""}`
-              : ""}
-          </p>
+        <div className="customer-database__header-row">
+          <div className="customer-database__header-main">
+            <h2>Customer information database</h2>
+            <p className="customer-database__meta">
+              {status?.filename ? `${status.filename} · ` : ""}
+              {customers.length} account{customers.length !== 1 ? "s" : ""}
+              {status?.orderCount != null && status.orderCount > 0
+                ? ` · ${status.orderCount} active order${status.orderCount !== 1 ? "s" : ""}`
+                : ""}
+              {customers.length === 0 ? " · upload Outfield_Accounts.csv to import" : ""}
+            </p>
+          </div>
+          <div className="customer-database__header-toolbar">
+            <CustomerUpload
+              layout="header"
+              hideLoadedStatus
+              refreshKey={refreshKey}
+              onCustomersLoaded={() => {
+                load();
+                onUploadComplete?.();
+              }}
+              onUploaded={() => {
+                load();
+                onUploadComplete?.();
+              }}
+            />
+            <button type="button" className="btn btn--secondary btn--compact" onClick={load}>
+              Refresh
+            </button>
+          </div>
         </div>
-        <button type="button" className="btn btn--secondary btn--compact" onClick={load}>
-          Refresh
-        </button>
       </header>
-
-      <div className="customer-database__upload">
-        <CustomerUpload
-          title="Upload Outfield accounts"
-          layout="inline"
-          refreshKey={refreshKey}
-          onCustomersLoaded={() => {
-            load();
-            onUploadComplete?.();
-          }}
-          onUploaded={() => {
-            load();
-            onUploadComplete?.();
-          }}
-        />
-        <p className="customer-database__upload-hint">
-          Use your weekly Outfield export (<strong>Outfield_Accounts.csv</strong>): name, address,
-          city, phone, email, team members, delivery instructions, LID, payment method, and territory.
-        </p>
-      </div>
 
       {loading && <p className="customer-database__hint">Loading customer data…</p>}
       {error && <p className="customer-database__error">{error}</p>}
@@ -289,9 +340,29 @@ export default function CustomerDatabaseDashboard({
           </div>
 
           <div className="customer-database__orders-bar">
-            <p className="customer-database__orders-summary">
-              {selectedCount} selected to add · {status?.orderCount ?? 0} on orders this week
-            </p>
+            <div className="customer-database__orders-summary-wrap">
+              <p className="customer-database__orders-summary">
+                {selectedCount} selected to add · {status?.orderCount ?? 0} on orders this week
+              </p>
+              <label className="customer-database__route-pick">
+                <span className="customer-database__route-pick-label">Route</span>
+                <select
+                  className="customer-database__route-select"
+                  value={targetRouteId}
+                  onChange={(e) => {
+                    setTargetRouteId(e.target.value);
+                    setOrderError(null);
+                  }}
+                >
+                  <option value="">Choose route…</option>
+                  {routeOptions.map((route) => (
+                    <option key={route.id} value={route.id}>
+                      {route.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
             <div className="customer-database__orders-actions">
               <button
                 type="button"
@@ -312,7 +383,13 @@ export default function CustomerDatabaseDashboard({
               <button
                 type="button"
                 className="btn btn--primary btn--compact"
-                disabled={savingOrders || clearingSelection || selectedCount === 0}
+                disabled={
+                  savingOrders ||
+                  clearingSelection ||
+                  selectedCount === 0 ||
+                  !targetRouteId ||
+                  incompatibleForRoute.length > 0
+                }
                 onClick={() => void handleApplyOrders()}
               >
                 {savingOrders ? "Adding…" : "Add to orders this week"}
@@ -351,7 +428,6 @@ export default function CustomerDatabaseDashboard({
               <tbody>
                 {filtered.map((c) => {
                   const sel = selection[c.id] ?? { selected: false, cycle: 1 };
-                  const isPhilly = c.territoryId === "philadelphia";
                   return (
                   <tr
                     key={c.id}
@@ -402,22 +478,7 @@ export default function CustomerDatabaseDashboard({
                     <td>
                       {c.address}, {c.city}
                     </td>
-                    <td onClick={(e) => e.stopPropagation()}>
-                      {c.territoryName}
-                      {sel.selected && isPhilly && (
-                        <label className="customer-database__philly-run">
-                          Run{" "}
-                          <select
-                            value={sel.cycle}
-                            aria-label={`Philadelphia run for ${c.name}`}
-                            onChange={(e) => setCycle(c.id, Number(e.target.value))}
-                          >
-                            <option value={1}>Wed</option>
-                            <option value={2}>Thu</option>
-                          </select>
-                        </label>
-                      )}
-                    </td>
+                    <td onClick={(e) => e.stopPropagation()}>{c.territoryName}</td>
                     <td>
                       <ContactDisplay
                         contactName={c.contactName}

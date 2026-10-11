@@ -1,3 +1,4 @@
+import { nearestDeliveryRouteAmong } from "../../shared/nearestDeliveryRoute.js";
 import type { TerritoryCycle } from "../../shared/types.js";
 
 /** Customer-facing territory labels (CSV / order selection). */
@@ -13,6 +14,8 @@ export const TERRITORY_DISPLAY_NAMES: Record<string, string> = {
 };
 
 export const THURSDAY_SEPA_CYCLE_ID = "thursday-sepa";
+export const LEHIGH_NORTHEAST_TUE_CYCLE_ID = "lehigh-northeast-tue";
+export const LEHIGH_NORTHEAST_FRI_CYCLE_ID = "lehigh-northeast-fri";
 
 /** Territory schedules from Territories and Delivery.xlsx */
 export const TERRITORY_CYCLES: TerritoryCycle[] = [
@@ -69,33 +72,39 @@ export const TERRITORY_CYCLES: TerritoryCycle[] = [
     multiDay: false,
   },
   {
-    id: "lehigh-northeast-fri",
-    territoryId: "lehigh-northeast-fri",
+    id: LEHIGH_NORTHEAST_TUE_CYCLE_ID,
+    territoryId: LEHIGH_NORTHEAST_TUE_CYCLE_ID,
     territoryIds: ["lehigh-valley", "northeast-pa"],
-    name: "Lehigh Valley & Northeast PA",
-    cutoffDay: "thursday",
+    name: "NEPA (Tuesday)",
+    cutoffDay: "monday",
     cutoffTime: "14:30",
-    deliveryDay: "friday",
+    deliveryDay: "tuesday",
     deliveryStart: "10:00",
     deliveryEnd: "16:00",
     cycle: 1,
     multiDay: false,
     manualTruckAssignment: true,
-    initialTruckCount: 2,
-    manualTruckMin: 2,
-    manualTruckMax: 3,
+    initialTruckCount: 1,
+    manualTruckMin: 1,
+    manualTruckMax: 2,
   },
   {
-    id: "northern-susquehanna",
-    territoryId: "northern-susquehanna",
-    name: "Northern Susquehanna Valley",
+    id: LEHIGH_NORTHEAST_FRI_CYCLE_ID,
+    territoryId: LEHIGH_NORTHEAST_FRI_CYCLE_ID,
+    territoryIds: ["lehigh-valley", "northeast-pa", "northern-susquehanna"],
+    name: "NEPA (Friday)",
     cutoffDay: "thursday",
     cutoffTime: "14:30",
     deliveryDay: "friday",
     deliveryStart: "10:00",
     deliveryEnd: "16:00",
-    cycle: 1,
+    cycle: 2,
     multiDay: false,
+    manualTruckAssignment: true,
+    initialTruckCount: 1,
+    manualTruckMin: 1,
+    manualTruckMax: 2,
+    dedicatedTerritoryTruckId: "northern-susquehanna",
   },
 ];
 
@@ -168,7 +177,11 @@ export function getTerritoryDisplayName(territoryId: string): string {
   return TERRITORY_DISPLAY_NAMES[territoryId] ?? territoryId;
 }
 
-export function resolveCycleId(territoryId: string, cycleRaw?: string | number): string {
+export function resolveCycleId(
+  territoryId: string,
+  cycleRaw?: string | number,
+  referenceDate: Date = new Date()
+): string {
   if (territoryId === "northern-philly") {
     return THURSDAY_SEPA_CYCLE_ID;
   }
@@ -176,7 +189,9 @@ export function resolveCycleId(territoryId: string, cycleRaw?: string | number):
   const cycles = getCyclesForTerritory(territoryId).sort((a, b) => a.cycle - b.cycle);
   if (cycles.length === 0) throw new Error(`No cycles for territory ${territoryId}`);
 
-  if (cycleRaw === undefined || cycleRaw === "") return cycles[0].id;
+  if (cycleRaw === undefined || cycleRaw === "") {
+    return nearestDeliveryRouteAmong(cycles, referenceDate)?.id ?? cycles[0]!.id;
+  }
 
   const n = typeof cycleRaw === "number" ? cycleRaw : Number(cycleRaw);
   if (!Number.isNaN(n)) {

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
-import { generateMapPdf } from "../lib/generateMapPdf";
+import { generateMapPdfExports, type MapPdfExport } from "../lib/generateMapPdf";
+import RouteMapPdfModal from "./RouteMapPdfModal";
 import { MapContainer, Marker, Polyline, Popup, TileLayer, useMap } from "react-leaflet";
 import L from "leaflet";
 import type { RoutePlan } from "@shared/types";
@@ -101,6 +102,14 @@ export default function RouteMap({
   routeLocked,
 }: RouteMapProps) {
   const [exportingMapPdf, setExportingMapPdf] = useState(false);
+  const [mapPdfExports, setMapPdfExports] = useState<MapPdfExport[] | null>(null);
+
+  const closeMapPdfModal = () => {
+    setMapPdfExports((prev) => {
+      prev?.forEach((item) => URL.revokeObjectURL(item.blobUrl));
+      return null;
+    });
+  };
 
   const routes = useMemo(
     () =>
@@ -134,6 +143,7 @@ export default function RouteMap({
         <TileLayer
           attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
           url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+          crossOrigin="anonymous"
           opacity={1}
         />
         <EnsureVisibleTiles />
@@ -287,12 +297,23 @@ export default function RouteMap({
             type="button"
             className="route-map-btn route-map-btn--primary"
             disabled={exportingMapPdf || plan.allStops.length === 0}
-            title="Save a PDF of the current map with numbered stops"
+            title={
+              plan.manualTruckAssignment && plan.segments.filter((s) => s.stops.length > 0).length > 1
+                ? "One PDF per truck with numbered stops"
+                : "Save a PDF of the current map with numbered stops"
+            }
             onClick={() => {
               setExportingMapPdf(true);
-              void generateMapPdf(plan, geometrySegments ?? null, {
+              void generateMapPdfExports(plan, geometrySegments ?? null, {
                 useGeometry: !pendingRouteOrder,
+                autoDownload: false,
               })
+                .then((res) => {
+                  setMapPdfExports((prev) => {
+                    prev?.forEach((item) => URL.revokeObjectURL(item.blobUrl));
+                    return res;
+                  });
+                })
                 .catch((err) => console.warn("Map PDF export failed:", err))
                 .finally(() => setExportingMapPdf(false));
             }}
@@ -304,6 +325,15 @@ export default function RouteMap({
           <p className="route-map__legend-error">{trafficRefreshError}</p>
         )}
       </div>
+
+      {mapPdfExports && mapPdfExports.length > 0 && (
+        <RouteMapPdfModal
+          exports={mapPdfExports}
+          routeName={plan.territoryName}
+          deliveryDate={plan.deliveryDate}
+          onClose={closeMapPdfModal}
+        />
+      )}
     </div>
   );
 }

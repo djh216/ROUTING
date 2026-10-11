@@ -1,5 +1,6 @@
 import type { Customer } from "../../shared/types.js";
 import { normalizeContactFields } from "../../shared/contactFormat.js";
+import { sanitizeTeamMembers } from "../../shared/teamMembers.js";
 import { resolveTerritoryInput } from "./territories.js";
 import { normalizeAddressFields, resolveCoordinates, consumeGeocoderAlerts, resetGeocoderAlerts } from "./geocoder.js";
 
@@ -335,7 +336,8 @@ export async function parseCustomersCsv(
     while (seenIds.has(id)) id = `${id}-${rowIdx}`;
     seenIds.add(id);
 
-    const teamMembers = row.team_members?.trim() ?? "";
+    const teamMembersRaw = row.team_members?.trim() ?? "";
+    const teamMembers = sanitizeTeamMembers(teamMembersRaw);
     const outfieldLid = row.outfield_lid?.trim() ?? "";
     const paymentMethod = row.payment_method?.trim() ?? "";
     const contactEmail = parseContactEmailField(row.contact_email ?? "");

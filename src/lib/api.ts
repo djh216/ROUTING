@@ -116,12 +116,13 @@ export async function applyOrderSelection(
 
 /** Add accounts to this week's orders without replacing existing orders. */
 export async function addOrderSelections(
-  selections: OrderSelectionInput[]
+  selections: OrderSelectionInput[],
+  cycleId?: string
 ): Promise<CustomerUploadSummary> {
   const res = await fetch(`${API}/orders/selection/add`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ selections }),
+    body: JSON.stringify({ cycleId, selections }),
   });
   const data = (await res.json().catch(() => ({}))) as CustomerUploadSummary & {
     error?: string;

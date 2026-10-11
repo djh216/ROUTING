@@ -59,53 +59,70 @@ assert(
 const lehighNe = TERRITORY_CYCLES.find((c) => c.id === "lehigh-northeast-fri")!;
 const lehighNeOrders = ORDERS.filter((o) => isOrderEligible(o, lehighNe, REF));
 assert(
-  lehighNeOrders.length === 4,
-  `Expected 4 Lehigh/Northeast orders, got ${lehighNeOrders.length}`
+  lehighNeOrders.length === 6,
+  `Expected 6 NEPA (Friday) orders, got ${lehighNeOrders.length}`
 );
 const { plan: lehighNePlan } = await buildRoutePlan("lehigh-northeast-fri", ORDERS, REF);
-assert(lehighNePlan.manualTruckAssignment === true, "Lehigh/Northeast should use manual trucks");
-assert(
-  lehighNePlan.segments.length >= 2 && lehighNePlan.segments.length <= 3,
-  "Lehigh/Northeast should use 2–3 trucks"
-);
+assert(lehighNePlan.manualTruckAssignment === true, "NEPA (Friday) should use manual trucks");
+assert(lehighNePlan.segments.length === 3, "NEPA (Friday) should use 2 geographic trucks plus Northern Susquehanna");
 const lehighAssigned = lehighNePlan.segments.reduce((n, s) => n + s.stops.length, 0);
-assert(lehighAssigned === 4, "All Lehigh/Northeast stops should be assigned to trucks");
-const lehighActiveTrucks = lehighNePlan.segments.filter((s) => s.stops.length > 0).length;
-assert(
-  lehighActiveTrucks >= 2,
-  "Initial Lehigh/Northeast build should split across at least 2 trucks"
+assert(lehighAssigned === 6, "All NEPA (Friday) stops should be assigned to trucks");
+const nsSegment = lehighNePlan.segments[lehighNePlan.segments.length - 1]!;
+const nsTerritories = new Set(
+  nsSegment.stops.map((assignment) => {
+    const stop = lehighNePlan.allStops.find((s) => s.id === assignment.stopId);
+    return stop?.territoryId;
+  })
 );
+nsTerritories.delete(undefined);
+assert(
+  nsTerritories.size === 1 && nsTerritories.has("northern-susquehanna"),
+  "Northern Susquehanna Valley should be on its own truck"
+);
+assert(nsSegment.stops.length === 2, "Northern Susquehanna truck should include both NS stops");
 assert(
   lehighNePlan.segments.every((s) => s.validation.errors.length === 0),
-  "Initial Lehigh/Northeast truck routes should meet delivery windows"
+  "Initial NEPA (Friday) truck routes should meet delivery windows"
 );
 assert(
-  lehighNePlan.allStops.length === 4,
-  `Expected 4 stops on combined Lehigh/Northeast plan, got ${lehighNePlan.allStops.length}`
+  lehighNePlan.allStops.length === 6,
+  `Expected 6 stops on NEPA (Friday) plan, got ${lehighNePlan.allStops.length}`
 );
 
-const lehighSeg0 = lehighNePlan.segments[0].id;
-const lehighSeg1 = lehighNePlan.segments[1].id;
-const lehighStopIds = lehighNePlan.allStops.map((s) => s.id);
-const lehighMatrix = createEstimatedTravelMatrix(SCRANTON_DEPOT, lehighNePlan.allStops);
-const manualLehigh = await applySegmentStops(
-  lehighNePlan,
-  [
-    {
-      segmentId: lehighSeg0,
-      stops: lehighStopIds.slice(0, 2).map((stopId, i) => ({ stopId, position: i })),
-    },
-    {
-      segmentId: lehighSeg1,
-      stops: lehighStopIds.slice(2).map((stopId, i) => ({ stopId, position: i })),
-    },
-  ],
-  lehighMatrix
+const lehighNeTue = TERRITORY_CYCLES.find((c) => c.id === "lehigh-northeast-tue")!;
+const REF_TUE = new Date("2026-09-09T12:00:00");
+const tueSampleOrders = ORDERS.filter((o) =>
+  ["o15", "o16", "o17", "o18"].includes(o.id)
+).map((o) => ({
+  ...o,
+  cycleId: "lehigh-northeast-tue",
+  approvedAt: "2026-09-07T10:00:00",
+}));
+const { plan: lehighTuePlan } = await buildRoutePlan(
+  "lehigh-northeast-tue",
+  tueSampleOrders,
+  REF_TUE
 );
+assert(lehighTuePlan.segments.length === 2, "NEPA (Tuesday) should split across 2 trucks");
+assert(
+  lehighTuePlan.allStops.length === 4,
+  `Expected 4 stops on NEPA (Tuesday) plan, got ${lehighTuePlan.allStops.length}`
+);
+
+const singleTueOrder = tueSampleOrders.filter((o) => o.id === "o15");
+const { plan: compactTuePlan } = await buildRoutePlan(
+  "lehigh-northeast-tue",
+  singleTueOrder,
+  REF_TUE
+);
+assert(compactTuePlan.segments.length === 1, "NEPA (Tuesday) with one stop should use one truck");
+
+const lehighMatrix = createEstimatedTravelMatrix(SCRANTON_DEPOT, lehighNePlan.allStops);
+const manualLehigh = lehighNePlan;
 const truck3StopId = manualLehigh.segments[0].stops[0]?.stopId;
 if (truck3StopId) {
   const truck3Assigned = await assignStopToTruck(manualLehigh, truck3StopId, 3, lehighMatrix);
-  assert(truck3Assigned.segments.length === 3, "Selecting truck 3 should add a third truck");
+  assert(truck3Assigned.segments.length === 3, "NEPA (Friday) should keep 3 trucks");
   assert(
     truck3Assigned.segments[2].stops.some((s) => s.stopId === truck3StopId),
     "Stop should move to truck 3"
@@ -117,21 +134,14 @@ if (truck3StopId) {
 }
 
 const reoptimizedLehigh = await reoptimizeSegments(manualLehigh, undefined, lehighMatrix);
-assert(
-  reoptimizedLehigh.segments[0].stops.length === 2,
-  "Truck 1 should keep 2 stops after re-optimize"
-);
-assert(
-  reoptimizedLehigh.segments[1].stops.length === 2,
-  "Truck 2 should keep 2 stops after re-optimize"
-);
-const truck1Before = new Set(manualLehigh.segments[0].stops.map((s) => s.stopId));
-const truck1After = new Set(reoptimizedLehigh.segments[0].stops.map((s) => s.stopId));
-assert(
-  truck1Before.size === truck1After.size &&
-    [...truck1Before].every((id) => truck1After.has(id)),
-  "Re-optimize should not move stops between trucks"
-);
+for (let i = 0; i < 3; i++) {
+  const before = new Set(manualLehigh.segments[i]!.stops.map((s) => s.stopId));
+  const after = new Set(reoptimizedLehigh.segments[i]!.stops.map((s) => s.stopId));
+  assert(
+    before.size === after.size && [...before].every((id) => after.has(id)),
+    `Re-optimize should not move stops off NEPA (Friday) truck ${i + 1}`
+  );
+}
 
 const { plan: pittsburgh, matrix } = await buildRoutePlan("pittsburgh", ORDERS, REF);
 assert(pittsburgh.allStops.length === 7, `Expected 7 Pittsburgh stops, got ${pittsburgh.allStops.length}`);

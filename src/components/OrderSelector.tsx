@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { applyOrderSelection, fetchCustomerList, fetchUploadStatus } from "../lib/api";
 import { MIN_ORDER_CASES } from "@shared/constants";
+import { TERRITORY_DELIVERY_RUNS } from "@shared/deliveryRuns";
 import type { CustomerListItem } from "@shared/types";
 
 interface OrderSelectorProps {
@@ -110,11 +111,15 @@ export default function OrderSelector({ onApplied, refreshKey = 0 }: OrderSelect
     try {
       const selections = (Object.entries(selection) as [string, SelectionState[string]][])
         .filter(([, v]) => v.selected)
-        .map(([customerId, v]) => ({
-          customerId,
-          cases: MIN_ORDER_CASES,
-          cycle: v.cycle,
-        }));
+        .map(([customerId, v]) => {
+          const row = customers.find((c) => c.id === customerId);
+          return {
+            customerId,
+            cases: MIN_ORDER_CASES,
+            cycleId: row?.orderCycleId,
+            cycle: v.cycle,
+          };
+        });
       if (selections.length === 0) {
         await applyOrderSelection([]);
         onApplied();
@@ -189,7 +194,7 @@ export default function OrderSelector({ onApplied, refreshKey = 0 }: OrderSelect
       <ul className="order-selector__list">
         {filtered.map((c) => {
           const sel = selection[c.id] ?? { selected: false, cycle: 1 };
-          const isPhilly = c.territoryId === "philadelphia";
+          const runOptions = TERRITORY_DELIVERY_RUNS[c.territoryId];
           return (
             <li
               key={c.id}
@@ -203,13 +208,16 @@ export default function OrderSelector({ onApplied, refreshKey = 0 }: OrderSelect
                   <span className="order-selector__territory">{c.territoryName}</span>
                 </span>
               </label>
-              {sel.selected && isPhilly && (
+              {sel.selected && runOptions && (
                 <div className="order-selector__fields">
                   <label className="order-selector__cycle">
                     Run
                     <select value={sel.cycle} onChange={(e) => setCycle(c.id, Number(e.target.value))}>
-                      <option value={1}>Wed</option>
-                      <option value={2}>Thu</option>
+                      {runOptions.map((run) => (
+                        <option key={run.cycle} value={run.cycle}>
+                          {run.label}
+                        </option>
+                      ))}
                     </select>
                   </label>
                 </div>

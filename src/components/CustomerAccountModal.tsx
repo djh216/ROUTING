@@ -1,7 +1,13 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { updateCustomerAccount } from "../lib/api";
 import type { CustomerListItem } from "@shared/types";
+import { deliveryRunLabel } from "@shared/deliveryRuns";
+import { sanitizeTeamMembers } from "@shared/teamMembers";
 import ContactDisplay from "./ContactDisplay";
+
+function displayTeamMembers(raw?: string): string {
+  return sanitizeTeamMembers(raw ?? "");
+}
 
 interface CustomerAccountModalProps {
   customer: CustomerListItem;
@@ -69,7 +75,7 @@ export default function CustomerAccountModal({
     setContactPhone(c.contactPhone);
     setContactEmail(c.contactEmail ?? "");
     setPaymentMethod(c.paymentMethod ?? "");
-    setTeamMembers(c.teamMembers ?? "");
+    setTeamMembers(displayTeamMembers(c.teamMembers));
     setOutfieldLid(c.outfieldLid ?? "");
     setDeliveryInstructions(c.deliveryInstructions ?? "");
     setError(null);
@@ -95,11 +101,9 @@ export default function CustomerAccountModal({
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [onClose, saving, isEditing, customer, resetFormFromCustomer]);
 
-  const phillyRun =
-    customer.territoryId === "philadelphia" && customer.cycle != null
-      ? customer.cycle === 2
-        ? "Thursday"
-        : "Wednesday"
+  const deliveryRun =
+    customer.hasOrder && customer.cycle != null
+      ? deliveryRunLabel(customer.territoryId, customer.cycle)
       : null;
 
   function handleCancelEdit() {
@@ -194,7 +198,7 @@ export default function CustomerAccountModal({
               }
             />
             <DetailRow label="Territory" value={customer.territoryName} />
-            {phillyRun && <DetailRow label="Philadelphia run" value={phillyRun} />}
+            {deliveryRun && <DetailRow label="Delivery run" value={deliveryRun} />}
             <DetailRow
               label="Contact"
               value={
@@ -206,8 +210,11 @@ export default function CustomerAccountModal({
             />
             <DetailRow label="Email" value={customer.contactEmail || "—"} />
             <DetailRow label="N/A Payment" value={customer.paymentMethod || "—"} />
-            {customer.teamMembers ? (
-              <DetailRow label="Team members" value={customer.teamMembers} />
+            {displayTeamMembers(customer.teamMembers) ? (
+              <DetailRow
+                label="Team members"
+                value={displayTeamMembers(customer.teamMembers)}
+              />
             ) : null}
             <DetailRow
               label="Delivery instructions"
@@ -267,10 +274,10 @@ export default function CustomerAccountModal({
               <span className="customer-account-modal__label">Territory</span>
               <span className="customer-account-modal__value">{customer.territoryName}</span>
             </div>
-            {phillyRun && (
+            {deliveryRun && (
               <div className="customer-account-modal__row customer-account-modal__row--readonly">
-                <span className="customer-account-modal__label">Philadelphia run</span>
-                <span className="customer-account-modal__value">{phillyRun}</span>
+                <span className="customer-account-modal__label">Delivery run</span>
+                <span className="customer-account-modal__value">{deliveryRun}</span>
               </div>
             )}
             <FieldRow label="Contact name" id="account-contact-name">

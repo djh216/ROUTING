@@ -982,20 +982,54 @@ function geographicPartitionOrderings(stops: Stop[]): Stop[][] {
   return orderings;
 }
 
-/** Split stops across 2–3 trucks for manual-assignment routes (initial build only). */
-function assignInitialManualTruckRoutes(
+/** Map territories to truck 1, then 2, then 3 — skip empty territories (no gaps). */
+function assignStopsToTerritoryTrucks(
+  stops: Stop[],
+  territoryOrder: string[]
+): Stop[][] {
+  const groups: Stop[][] = [];
+  for (const territoryId of territoryOrder) {
+    const group = stops.filter((stop) => stop.territoryId === territoryId);
+    if (group.length > 0) groups.push(group);
+  }
+  const assigned = new Set(groups.flat().map((stop) => stop.id));
+  const unmatched = stops.filter((stop) => !assigned.has(stop.id));
+  if (unmatched.length > 0) {
+    if (groups.length > 0) groups[groups.length - 1]!.push(...unmatched);
+    else groups.push(unmatched);
+  }
+  return groups;
+}
+
+type GeographicTruckSplitOptions = {
+  minTrucks?: number;
+  maxTrucks?: number;
+  minColumns?: number;
+};
+
+function assignGeographicManualTruckRoutes(
   stops: Stop[],
   depot: Depot,
   cycle: TerritoryCycle,
   matrix: TravelMatrix,
-  priorityFilter?: (stop: Stop) => boolean
+  priorityFilter?: (stop: Stop) => boolean,
+  options?: GeographicTruckSplitOptions
 ): Stop[][] {
-  const minTrucks = Math.max(1, cycle.manualTruckMin ?? cycle.initialTruckCount ?? 2);
-  const maxTrucks = Math.max(minTrucks, cycle.manualTruckMax ?? 3);
-  const minColumns = Math.max(minTrucks, cycle.initialTruckCount ?? minTrucks);
+  const minTrucks = Math.max(
+    1,
+    options?.minTrucks ?? cycle.manualTruckMin ?? cycle.initialTruckCount ?? 2
+  );
+  const maxTrucks = Math.max(
+    minTrucks,
+    options?.maxTrucks ?? cycle.manualTruckMax ?? 3
+  );
+  const minColumns = Math.max(
+    minTrucks,
+    options?.minColumns ?? cycle.initialTruckCount ?? minTrucks
+  );
 
   if (stops.length === 0) {
-    return Array.from({ length: minColumns }, () => []);
+    return minColumns > 0 ? Array.from({ length: minColumns }, () => []) : [];
   }
 
   const stopMap = new Map(stops.map((s) => [s.id, s]));
@@ -1063,6 +1097,72 @@ function assignInitialManualTruckRoutes(
     groups.push([]);
   }
   return groups;
+}
+
+/** Split stops across 2–3 trucks for manual-assignment routes (initial build only). */
+function assignInitialManualTruckRoutes(
+  stops: Stop[],
+  depot: Depot,
+  cycle: TerritoryCycle,
+  matrix: TravelMatrix,
+  priorityFilter?: (stop: Stop) => boolean
+): Stop[][] {
+  const minTrucks = Math.max(1, cycle.manualTruckMin ?? cycle.initialTruckCount ?? 2);
+  const maxTrucks = Math.max(minTrucks, cycle.manualTruckMax ?? 3);
+  const minColumns = Math.max(minTrucks, cycle.initialTruckCount ?? minTrucks);
+
+  if (stops.length === 0) {
+    return Array.from({ length: minColumns }, () => []);
+  }
+
+  if (cycle.dedicatedTerritoryTruckId) {
+    const dedicatedId = cycle.dedicatedTerritoryTruckId;
+    const dedicatedStops = stops.filter((stop) => stop.territoryId === dedicatedId);
+    const restStops = stops.filter((stop) => stop.territoryId !== dedicatedId);
+
+    const restGroups =
+      restStops.length > 0
+        ? assignGeographicManualTruckRoutes(
+            restStops,
+            depot,
+            cycle,
+            matrix,
+            priorityFilter,
+            { minTrucks: 1, maxTrucks: 2, minColumns: 0 }
+          ).filter((group) => group.length > 0)
+        : [];
+
+    const groups =
+      dedicatedStops.length > 0 ? [...restGroups, dedicatedStops] : restGroups;
+
+    if (groups.length === 0) {
+      return [];
+    }
+
+    return optimizeSegmentOrders(groups, depot, cycle, matrix, priorityFilter);
+  }
+
+  if (cycle.territoryTruckAssignment?.length) {
+    const territoryGroups = assignStopsToTerritoryTrucks(
+      stops,
+      cycle.territoryTruckAssignment
+    );
+    const cap = Math.max(1, cycle.manualTruckMax ?? territoryGroups.length);
+    const capped = territoryGroups.slice(0, cap);
+    if (capped.length === 0) {
+      return [];
+    }
+    return optimizeSegmentOrders(capped, depot, cycle, matrix, priorityFilter);
+  }
+
+  return assignGeographicManualTruckRoutes(
+    stops,
+    depot,
+    cycle,
+    matrix,
+    priorityFilter,
+    { minTrucks, maxTrucks, minColumns }
+  );
 }
 
 function optimizeSegmentOrders(

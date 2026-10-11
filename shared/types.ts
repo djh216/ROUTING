@@ -41,6 +41,10 @@ export interface TerritoryCycle {
   manualTruckMin?: number;
   /** Initial auto-split uses at most this many trucks (when manualTruckAssignment). */
   manualTruckMax?: number;
+  /** One truck per territory id, in column order (initial build only). */
+  territoryTruckAssignment?: string[];
+  /** Stops in this territory always get their own truck; others use geographic split. */
+  dedicatedTerritoryTruckId?: string;
 }
 
 export interface Customer {
@@ -98,12 +102,16 @@ export interface CustomerListItem extends Customer {
   cases: number;
   /** Philadelphia only: 1 = Wed run, 2 = Thu run */
   cycle?: number;
+  /** Route the account is on when hasOrder is true (TerritoryCycle id). */
+  orderCycleId?: string;
 }
 
 export interface OrderSelectionInput {
   customerId: string;
   cases: number;
   cycle?: number;
+  /** Delivery route (TerritoryCycle id). When set, assigns the order to this route. */
+  cycleId?: string;
 }
 
 /** Manual order entry — same fields as weekly CSV rows */

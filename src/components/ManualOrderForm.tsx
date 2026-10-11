@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { addManualOrder, fetchTerritories, fetchTerritoryCycles } from "../lib/api";
+import { TERRITORY_DELIVERY_RUNS, territoryHasDeliveryRunChoice } from "@shared/deliveryRuns";
+import { defaultCycleForTerritory } from "../lib/deliveryRoutes";
 import type { ManualOrderInput, RoutePlan, TerritoryCycle } from "@shared/types";
 
 interface ManualOrderFormProps {
@@ -66,8 +68,9 @@ export default function ManualOrderForm({ activePlan, onAdded }: ManualOrderForm
   const targetCycleId = cycleIdForTerritory(
     cycles,
     form.territoryId,
-    form.territoryId === "philadelphia" ? (form.cycle ?? 1) : undefined
+    territoryHasDeliveryRunChoice(form.territoryId) ? (form.cycle ?? 1) : undefined
   );
+  const deliveryRunOptions = TERRITORY_DELIVERY_RUNS[form.territoryId];
   const matchesBuiltRoute =
     activePlan != null &&
     activePlan.segments.length > 0 &&
@@ -92,7 +95,13 @@ export default function ManualOrderForm({ activePlan, onAdded }: ManualOrderForm
   }, [chooseSegment, placementKey]);
 
   function updateField<K extends keyof ManualOrderInput>(key: K, value: ManualOrderInput[K]) {
-    setForm((prev) => ({ ...prev, [key]: value }));
+    setForm((prev) => {
+      const next = { ...prev, [key]: value };
+      if (key === "territoryId" && typeof value === "string" && territoryHasDeliveryRunChoice(value)) {
+        next.cycle = defaultCycleForTerritory(cycles, value);
+      }
+      return next;
+    });
     setError(null);
   }
 
@@ -108,7 +117,7 @@ export default function ManualOrderForm({ activePlan, onAdded }: ManualOrderForm
       }
       const payload: ManualOrderInput = {
         ...form,
-        cycle: form.territoryId === "philadelphia" ? (form.cycle ?? 1) : undefined,
+        cycle: territoryHasDeliveryRunChoice(form.territoryId) ? (form.cycle ?? 1) : undefined,
         segmentId: appendSegmentId,
       };
       const result = await addManualOrder(payload);
@@ -217,15 +226,18 @@ export default function ManualOrderForm({ activePlan, onAdded }: ManualOrderForm
             </select>
           </label>
 
-          {form.territoryId === "philadelphia" && (
+          {deliveryRunOptions && (
             <label className="manual-order__field">
               Delivery run
               <select
                 value={form.cycle ?? 1}
                 onChange={(e) => updateField("cycle", Number(e.target.value))}
               >
-                <option value={1}>Wednesday</option>
-                <option value={2}>Thursday</option>
+                {deliveryRunOptions.map((run) => (
+                  <option key={run.cycle} value={run.cycle}>
+                    {run.label}
+                  </option>
+                ))}
               </select>
             </label>
           )}

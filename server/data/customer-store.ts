@@ -21,6 +21,7 @@ import {
 import { defaultApprovedAt } from "../routing/scheduling.js";
 import { MIN_ORDER_CASES } from "../../shared/constants.js";
 import { normalizeContactFields } from "../../shared/contactFormat.js";
+import { applyTeamMembersPolicy, sanitizeTeamMembers } from "../../shared/teamMembers.js";
 import { resolveCoordinates, normalizeAddressFields, consumeGeocoderAlerts, resetGeocoderAlerts } from "./geocoder.js";
 
 let customers: Customer[] = [];
@@ -71,6 +72,7 @@ export function updateCustomerDeliveryInstructions(
 }
 
 function customerToListItem(c: Customer): CustomerListItem {
+  applyTeamMembersPolicy(c);
   const orderByCustomer = new Map(orders.map((o) => [o.customerId, o]));
   const existing = orderByCustomer.get(c.id);
   const suggested = suggestedCases[c.id];
@@ -80,6 +82,7 @@ function customerToListItem(c: Customer): CustomerListItem {
     hasOrder: !!existing,
     cases: existing?.cases ?? suggested ?? 0,
     cycle: existing ? cycleNumberFromId(existing.cycleId) : suggestedCycles[c.id],
+    orderCycleId: existing?.cycleId,
   };
 }
 
@@ -132,7 +135,7 @@ export async function updateCustomerAccount(
   }
 
   if (input.teamMembers !== undefined) {
-    customer.teamMembers = input.teamMembers.trim();
+    customer.teamMembers = sanitizeTeamMembers(input.teamMembers);
   }
 
   if (input.outfieldLid !== undefined) {
@@ -199,6 +202,7 @@ export async function importWeeklyCustomersCsv(
   }
 
   customers = result.customers;
+  for (const c of customers) applyTeamMembersPolicy(c);
   orders = [];
   suggestedCases = result.suggestedCases;
   suggestedCycles = result.suggestedCycles;
@@ -240,29 +244,74 @@ export function getAvailableCustomersForCycle(cycleId: string): CustomerListItem
   const cycle = getCycleById(cycleId);
   if (!cycle) return [];
 
-  const onRoute = new Set(
+  const onThisRoute = new Set(
     orders.filter((o) => o.cycleId === cycleId).map((o) => o.customerId)
   );
 
-  return getCustomerListItems().filter(
-    (c) => cycleIncludesTerritory(cycle, c.territoryId) && !onRoute.has(c.id)
-  );
+  return getCustomerListItems().filter((c) => {
+    if (!cycleIncludesTerritory(cycle, c.territoryId)) return false;
+    if (onThisRoute.has(c.id)) return false;
+    const existing = findOrderForCustomer(c.id);
+    // Philadelphia Wed vs Thu: already on another run for this account.
+    if (existing && existing.cycleId !== cycleId) return false;
+    return true;
+  });
+}
+
+function findOrderForCustomer(customerId: string): Order | undefined {
+  return orders.find((o) => o.customerId === customerId);
 }
 
 function pushOrderForCustomer(
   customer: Customer,
   cycleId: string,
-  referenceDate: Date
+  referenceDate: Date,
+  cases: number = MIN_ORDER_CASES
 ): void {
+  if (findOrderForCustomer(customer.id)) {
+    throw new Error(`${customer.name} already has an order this week`);
+  }
   orders.push({
     id: `order-${customer.id}-${Date.now()}`,
     customerId: customer.id,
     territoryId: customer.territoryId,
     cycleId,
-    cases: MIN_ORDER_CASES,
+    cases,
     approvedAt: defaultApprovedAt(cycleId, referenceDate),
     status: "approved",
   });
+}
+
+/** One weekly order per account — assign or move to the chosen route. */
+function assignCustomerToRoute(
+  customer: Customer,
+  cycleId: string,
+  referenceDate: Date,
+  cases: number,
+  explicitRoute: boolean
+): "created" | "moved" | "unchanged" {
+  const existing = findOrderForCustomer(customer.id);
+  if (!existing) {
+    orders.push({
+      id: `order-${customer.id}-${Date.now()}`,
+      customerId: customer.id,
+      territoryId: customer.territoryId,
+      cycleId,
+      cases,
+      approvedAt: defaultApprovedAt(cycleId, referenceDate),
+      status: "approved",
+    });
+    return "created";
+  }
+  if (existing.cycleId === cycleId) return "unchanged";
+  if (!explicitRoute) {
+    throw new Error(`${customer.name} is already on orders this week`);
+  }
+  existing.cycleId = cycleId;
+  existing.territoryId = customer.territoryId;
+  existing.cases = cases;
+  existing.approvedAt = defaultApprovedAt(cycleId, referenceDate);
+  return "moved";
 }
 
 function buildSummaryFromErrors(
@@ -299,6 +348,7 @@ function finalizeOrderSummary(warnings: string[]): CustomerUploadSummary {
 
 async function createManualCustomer(
   input: ManualOrderInput,
+  referenceDate: Date,
   forceCycleId?: string
 ): Promise<{ customer?: Customer; cycleId?: string; warnings: string[]; errors: string[] }> {
   const errors: string[] = [];
@@ -329,7 +379,13 @@ async function createManualCustomer(
 
   let cycleId: string;
   try {
-    cycleId = forceCycleId ?? resolveCycleId(territoryId!, input.cycle ?? 1);
+    cycleId =
+      forceCycleId ??
+      resolveCycleId(
+        territoryId!,
+        input.cycle !== undefined ? input.cycle : undefined,
+        referenceDate
+      );
   } catch {
     return {
       warnings,
@@ -366,7 +422,7 @@ export async function addManualOrder(
   input: ManualOrderInput,
   referenceDate: Date
 ): Promise<CustomerUploadSummary> {
-  const created = await createManualCustomer(input);
+  const created = await createManualCustomer(input, referenceDate);
   if (created.errors.length > 0) {
     return buildSummaryFromErrors(created.errors, created.warnings);
   }
@@ -395,10 +451,16 @@ export async function addStopToRoute(
       errors.push("Customer not found");
     } else if (!cycleIncludesTerritory(cycle, customer.territoryId)) {
       errors.push(`${customer.name} is not in this territory`);
-    } else if (orders.some((o) => o.customerId === customer.id && o.cycleId === cycleId)) {
-      errors.push(`${customer.name} is already on this route`);
     } else {
-      pushOrderForCustomer(customer, cycleId, referenceDate);
+      const existing = findOrderForCustomer(customer.id);
+      if (existing?.cycleId === cycleId) {
+        errors.push(`${customer.name} is already on this route`);
+      } else if (existing) {
+        const routeName = getCycleById(existing.cycleId)?.name ?? existing.cycleId;
+        errors.push(`${customer.name} is already on ${routeName}`);
+      } else {
+        pushOrderForCustomer(customer, cycleId, referenceDate);
+      }
     }
   } else {
     const manual = input as ManualOrderInput;
@@ -406,7 +468,7 @@ export async function addStopToRoute(
     if (!territoryId || !cycleIncludesTerritory(cycle, territoryId)) {
       errors.push("Territory must match the current route");
     } else {
-      const created = await createManualCustomer(manual, cycleId);
+      const created = await createManualCustomer(manual, referenceDate, cycleId);
       warnings.push(...created.warnings);
       errors.push(...created.errors);
       if (created.errors.length === 0 && created.customer) {
@@ -426,6 +488,32 @@ export async function addStopToRoute(
   };
 }
 
+function resolveOrderCycleId(
+  customer: Customer,
+  sel: OrderSelectionInput,
+  referenceDate: Date,
+  batchCycleId?: string
+): string {
+  const explicitRouteId = batchCycleId?.trim() || sel.cycleId?.trim();
+  if (explicitRouteId) {
+    const cycle = getCycleById(explicitRouteId);
+    if (!cycle) {
+      throw new Error(`Unknown route: ${explicitRouteId}`);
+    }
+    if (!cycleIncludesTerritory(cycle, customer.territoryId)) {
+      throw new Error(
+        `${customer.name} (${getTerritoryDisplayName(customer.territoryId)}) is not on route ${cycle.name}`
+      );
+    }
+    return cycle.id;
+  }
+  return resolveCycleId(
+    customer.territoryId,
+    sel.cycle !== undefined ? sel.cycle : undefined,
+    referenceDate
+  );
+}
+
 export function applyOrderSelection(
   selections: OrderSelectionInput[],
   referenceDate: Date
@@ -440,7 +528,7 @@ export function applyOrderSelection(
       return;
     }
     try {
-      const cycleId = resolveCycleId(customer.territoryId, sel.cycle ?? 1);
+      const cycleId = resolveOrderCycleId(customer, sel, referenceDate);
       orders.push({
         id: `order-${customer.id}-${idx}`,
         customerId: customer.id,
@@ -450,8 +538,8 @@ export function applyOrderSelection(
         approvedAt: defaultApprovedAt(cycleId, referenceDate),
         status: "approved",
       });
-    } catch {
-      errors.push(`Could not assign cycle for ${customer.name}`);
+    } catch (e) {
+      errors.push(e instanceof Error ? e.message : `Could not assign route for ${customer.name}`);
     }
   });
 
@@ -476,11 +564,12 @@ export function applyOrderSelection(
 /** Append selected accounts to this week's orders without removing existing orders. */
 export function addOrderSelections(
   selections: OrderSelectionInput[],
-  referenceDate: Date
+  referenceDate: Date,
+  batchCycleId?: string
 ): CustomerUploadSummary {
   const errors: string[] = [];
   const warnings: string[] = [];
-  const existingIds = new Set(orders.map((o) => o.customerId));
+  const batchRoute = batchCycleId?.trim() || undefined;
 
   for (const sel of selections) {
     const customer = getCustomerById(sel.customerId);
@@ -488,24 +577,22 @@ export function addOrderSelections(
       errors.push(`Unknown customer: ${sel.customerId}`);
       continue;
     }
-    if (existingIds.has(sel.customerId)) {
-      warnings.push(`${customer.name} is already on orders this week`);
-      continue;
-    }
+    const explicitRoute = Boolean(batchRoute || sel.cycleId?.trim());
     try {
-      const cycleId = resolveCycleId(customer.territoryId, sel.cycle ?? 1);
-      orders.push({
-        id: `order-${customer.id}-${orders.length}`,
-        customerId: customer.id,
-        territoryId: customer.territoryId,
+      const cycleId = resolveOrderCycleId(customer, sel, referenceDate, batchRoute);
+      const cases = sel.cases ?? MIN_ORDER_CASES;
+      const outcome = assignCustomerToRoute(
+        customer,
         cycleId,
-        cases: sel.cases ?? MIN_ORDER_CASES,
-        approvedAt: defaultApprovedAt(cycleId, referenceDate),
-        status: "approved",
-      });
-      existingIds.add(customer.id);
-    } catch {
-      errors.push(`Could not assign cycle for ${customer.name}`);
+        referenceDate,
+        cases,
+        explicitRoute
+      );
+      if (outcome === "unchanged") {
+        warnings.push(`${customer.name} is already on ${getCycleById(cycleId)?.name ?? cycleId}`);
+      }
+    } catch (e) {
+      errors.push(e instanceof Error ? e.message : `Could not assign route for ${customer.name}`);
     }
   }
 
@@ -546,7 +633,13 @@ export function clearOrdersForCycle(cycleId: string, referenceDate: Date): Custo
     const customer = getCustomerById(s.customerId);
     if (!customer) return true;
     try {
-      return resolveCycleId(customer.territoryId, s.cycle ?? 1) !== cycleId;
+      return (
+        resolveCycleId(
+          customer.territoryId,
+          s.cycle !== undefined ? s.cycle : undefined,
+          referenceDate
+        ) !== cycleId
+      );
     } catch {
       return true;
     }

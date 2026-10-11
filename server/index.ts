@@ -128,7 +128,11 @@ function resolveManualCycleId(input: { territoryId?: string; cycle?: number }): 
   const territoryId = resolveTerritoryInput(input.territoryId ?? "");
   if (!territoryId) return null;
   try {
-    return resolveCycleId(territoryId, input.cycle ?? 1);
+    return resolveCycleId(
+      territoryId,
+      input.cycle !== undefined ? input.cycle : undefined,
+      REFERENCE_DATE
+    );
   } catch {
     return null;
   }
@@ -299,8 +303,11 @@ app.post("/api/orders/selection", (req, res) => {
 });
 
 app.post("/api/orders/selection/add", (req, res) => {
-  const { selections } = req.body as { selections: OrderSelectionInput[] };
-  const summary = addOrderSelections(selections ?? [], REFERENCE_DATE);
+  const { selections, cycleId } = req.body as {
+    selections: OrderSelectionInput[];
+    cycleId?: string;
+  };
+  const summary = addOrderSelections(selections ?? [], REFERENCE_DATE, cycleId);
   if (summary.errors.length === 0) clearRoutePlans();
   res.status(summary.errors.length > 0 ? 400 : 200).json(summary);
 });
