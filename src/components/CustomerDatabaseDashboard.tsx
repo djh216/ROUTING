@@ -9,8 +9,6 @@ import {
 import { MIN_ORDER_CASES } from "@shared/constants";
 import type { CustomerListItem, CustomerUploadSummary, TerritoryCycle } from "@shared/types";
 import {
-  compatibleDeliveryRoutes,
-  cycleIncludesTerritory,
   defaultCycleForTerritory,
   defaultRouteAmong,
   routeOptionsForPicker,
@@ -18,8 +16,44 @@ import {
 import ContactDisplay from "./ContactDisplay";
 import CustomerAccountModal from "./CustomerAccountModal";
 import CustomerUpload from "./CustomerUpload";
+import CustomerDatabasePrintModal from "./CustomerDatabasePrintModal";
 
 type SelectionState = Record<string, { selected: boolean; cycle: number }>;
+
+type CustomerSortColumn =
+  | "name"
+  | "lid"
+  | "address"
+  | "territory"
+  | "contact"
+  | "email"
+  | "payment"
+  | "instructions";
+
+type SortDirection = "asc" | "desc";
+
+function customerSortValue(customer: CustomerListItem, column: CustomerSortColumn): string {
+  switch (column) {
+    case "name":
+      return customer.name;
+    case "lid":
+      return customer.outfieldLid ?? "";
+    case "address":
+      return `${customer.address}, ${customer.city}`;
+    case "territory":
+      return customer.territoryName;
+    case "contact":
+      return `${customer.contactName} ${customer.contactPhone}`.trim();
+    case "email":
+      return customer.contactEmail ?? "";
+    case "payment":
+      return customer.paymentMethod ?? "";
+    case "instructions":
+      return customer.deliveryInstructions;
+    default:
+      return "";
+  }
+}
 
 interface CustomerDatabaseDashboardProps {
   refreshKey?: number;
@@ -50,6 +84,9 @@ export default function CustomerDatabaseDashboard({
   const [detailCustomer, setDetailCustomer] = useState<CustomerListItem | null>(null);
   const [deliveryRoutes, setDeliveryRoutes] = useState<TerritoryCycle[]>([]);
   const [targetRouteId, setTargetRouteId] = useState("");
+  const [printModalOpen, setPrintModalOpen] = useState(false);
+  const [sortColumn, setSortColumn] = useState<CustomerSortColumn | null>(null);
+  const [sortDirection, setSortDirection] = useState<SortDirection>("asc");
 
   const load = useCallback(() => {
     setLoading(true);
@@ -103,24 +140,84 @@ export default function CustomerDatabaseDashboard({
     });
   }, [customers, territoryFilter, search]);
 
-  const selectedToAdd = useMemo(
-    () => customers.filter((c) => !c.hasOrder && selection[c.id]?.selected),
-    [customers, selection]
+  const sortedFiltered = useMemo(() => {
+    if (!sortColumn) return filtered;
+    const sign = sortDirection === "asc" ? 1 : -1;
+    return [...filtered].sort((a, b) => {
+      const cmp = customerSortValue(a, sortColumn)
+        .localeCompare(customerSortValue(b, sortColumn), undefined, {
+          sensitivity: "base",
+          numeric: true,
+        });
+      if (cmp !== 0) return cmp * sign;
+      return a.name.localeCompare(b.name, undefined, { sensitivity: "base" }) * sign;
+    });
+  }, [filtered, sortColumn, sortDirection]);
+
+  function toggleSort(column: CustomerSortColumn) {
+    if (sortColumn === column) {
+      setSortDirection((d) => (d === "asc" ? "desc" : "asc"));
+    } else {
+      setSortColumn(column);
+      setSortDirection("asc");
+    }
+  }
+
+  const selectedForRoute = useMemo(
+    () =>
+      customers.filter((c) => {
+        if (!selection[c.id]?.selected) return false;
+        if (!c.hasOrder) return true;
+        if (!targetRouteId) return true;
+        return c.orderCycleId !== targetRouteId;
+      }),
+    [customers, selection, targetRouteId]
   );
 
-  const selectedCount = selectedToAdd.length;
+  const selectedCount = selectedForRoute.length;
 
   const routeOptions = useMemo(
     () => routeOptionsForPicker(deliveryRoutes),
     [deliveryRoutes]
   );
 
-  const incompatibleForRoute = useMemo(() => {
-    if (!targetRouteId || selectedToAdd.length === 0) return [];
-    const route = deliveryRoutes.find((r) => r.id === targetRouteId);
-    if (!route) return selectedToAdd;
-    return selectedToAdd.filter((c) => !cycleIncludesTerritory(route, c.territoryId));
-  }, [targetRouteId, selectedToAdd, deliveryRoutes]);
+  const routeNameById = useMemo(() => {
+    const byId = new Map(deliveryRoutes.map((r) => [r.id, r.name]));
+    return (cycleId?: string) => (cycleId ? byId.get(cycleId) ?? "—" : "—");
+  }, [deliveryRoutes]);
+
+  const selectedForPrint = useMemo(
+    () => customers.filter((c) => selection[c.id]?.selected),
+    [customers, selection]
+  );
+
+  const printCustomers = useMemo(
+    () => (selectedForPrint.length > 0 ? selectedForPrint : filtered),
+    [selectedForPrint, filtered]
+  );
+
+  const printFilterSummary = useMemo(() => {
+    const parts: string[] = [];
+    if (selectedForPrint.length > 0) {
+      parts.push(
+        `${selectedForPrint.length} selected account${selectedForPrint.length === 1 ? "" : "s"}`
+      );
+    }
+    if (territoryFilter !== "all") parts.push(`Territory: ${territoryFilter}`);
+    if (search.trim()) parts.push(`Search: "${search.trim()}"`);
+    if (parts.length === 0) return "All accounts (no filters)";
+    return parts.join(" · ");
+  }, [territoryFilter, search, selectedForPrint.length]);
+
+  function deselectAllCheckboxes() {
+    setSelection((prev) => {
+      const next = { ...prev };
+      for (const id of Object.keys(next)) {
+        next[id] = { ...next[id]!, selected: false };
+      }
+      return next;
+    });
+  }
 
   useEffect(() => {
     if (selectedCount === 0) {
@@ -132,12 +229,11 @@ export default function CustomerDatabaseDashboard({
       if (defaultRouteCycleId && routeOptions.some((r) => r.id === defaultRouteCycleId)) {
         return defaultRouteCycleId;
       }
-      const compatible = compatibleDeliveryRoutes(deliveryRoutes, selectedToAdd);
-      const nearest = defaultRouteAmong(compatible, new Date());
+      const nearest = defaultRouteAmong(routeOptions, new Date());
       if (nearest) return nearest;
       return prev;
     });
-  }, [selectedCount, routeOptions, defaultRouteCycleId, deliveryRoutes, selectedToAdd]);
+  }, [selectedCount, routeOptions, defaultRouteCycleId]);
 
   const selectedAnyCount = useMemo(
     () => customers.filter((c) => selection[c.id]?.selected).length,
@@ -225,18 +321,9 @@ export default function CustomerDatabaseDashboard({
         setOrderError("Choose a route to add these accounts to.");
         return;
       }
-      if (incompatibleForRoute.length > 0) {
-        const routeName =
-          deliveryRoutes.find((r) => r.id === targetRouteId)?.name ?? targetRouteId;
-        setOrderError(
-          `${incompatibleForRoute.length} selected account${incompatibleForRoute.length !== 1 ? "s" : ""} cannot go on ${routeName}. Change the selection or pick another route.`
-        );
-        return;
-      }
-
-      const selections = selectedToAdd.map((c) => ({
+      const selections = selectedForRoute.map((c) => ({
         customerId: c.id,
-        cases: MIN_ORDER_CASES,
+        cases: c.cases > 0 ? c.cases : MIN_ORDER_CASES,
       }));
       if (selections.length === 0) return;
 
@@ -301,6 +388,15 @@ export default function CustomerDatabaseDashboard({
             <button type="button" className="btn btn--secondary btn--compact" onClick={load}>
               Refresh
             </button>
+            <button
+              type="button"
+              className="btn btn--secondary btn--compact"
+              disabled={customers.length === 0}
+              onClick={() => setPrintModalOpen(true)}
+              title="Print or save a PDF of the filtered customer list"
+            >
+              Print / PDF
+            </button>
           </div>
         </div>
       </header>
@@ -342,7 +438,8 @@ export default function CustomerDatabaseDashboard({
           <div className="customer-database__orders-bar">
             <div className="customer-database__orders-summary-wrap">
               <p className="customer-database__orders-summary">
-                {selectedCount} selected to add · {status?.orderCount ?? 0} on orders this week
+                {selectedCount} selected to add or move · {status?.orderCount ?? 0} on orders this
+                week
               </p>
               <label className="customer-database__route-pick">
                 <span className="customer-database__route-pick-label">Route</span>
@@ -387,15 +484,17 @@ export default function CustomerDatabaseDashboard({
                   savingOrders ||
                   clearingSelection ||
                   selectedCount === 0 ||
-                  !targetRouteId ||
-                  incompatibleForRoute.length > 0
+                  !targetRouteId
                 }
                 onClick={() => void handleApplyOrders()}
               >
-                {savingOrders ? "Adding…" : "Add to orders this week"}
+                {savingOrders ? "Saving…" : "Add or move to route"}
               </button>
             </div>
           </div>
+          {selectedAnyCount > 0 && selectedCount > 0 && !targetRouteId && (
+            <p className="customer-database__hint">Choose a route above to add or move selected accounts.</p>
+          )}
           {orderNotice && <p className="customer-database__notice">{orderNotice}</p>}
           {orderError && <p className="customer-database__error">{orderError}</p>}
 
@@ -415,18 +514,44 @@ export default function CustomerDatabaseDashboard({
               <thead>
                 <tr>
                   <th className="customer-database__col-select-head" aria-label="Select for orders" />
-                  <th>Restaurant</th>
-                  <th className="customer-database__lid">LID</th>
-                  <th>Address</th>
-                  <th>Territory</th>
-                  <th>Contact</th>
-                  <th>Email</th>
-                  <th>N/A Payment</th>
-                  <th>Instructions</th>
+                  {(
+                    [
+                      ["name", "Restaurant", false],
+                      ["lid", "LID", true],
+                      ["address", "Address", false],
+                      ["territory", "Territory", false],
+                      ["contact", "Contact", false],
+                      ["email", "Email", false],
+                      ["payment", "N/A Payment", false],
+                      ["instructions", "Instructions", false],
+                    ] as const
+                  ).map(([column, label, nowrap]) => {
+                    const active = sortColumn === column;
+                    return (
+                      <th
+                        key={column}
+                        className={nowrap ? "customer-database__lid" : undefined}
+                        aria-sort={
+                          active ? (sortDirection === "asc" ? "ascending" : "descending") : "none"
+                        }
+                      >
+                        <button
+                          type="button"
+                          className={`customer-database__sort-btn${active ? " customer-database__sort-btn--active" : ""}`}
+                          onClick={() => toggleSort(column)}
+                        >
+                          <span>{label}</span>
+                          <span className="customer-database__sort-indicator" aria-hidden>
+                            {active ? (sortDirection === "asc" ? "▲" : "▼") : "↕"}
+                          </span>
+                        </button>
+                      </th>
+                    );
+                  })}
                 </tr>
               </thead>
               <tbody>
-                {filtered.map((c) => {
+                {sortedFiltered.map((c) => {
                   const sel = selection[c.id] ?? { selected: false, cycle: 1 };
                   return (
                   <tr
@@ -453,7 +578,7 @@ export default function CustomerDatabaseDashboard({
                         checked={sel.selected}
                         aria-label={
                           c.hasOrder
-                            ? `Select ${c.name} to remove from orders this week`
+                            ? `Select ${c.name} to move or remove from orders this week`
                             : `Select ${c.name} to add to orders this week`
                         }
                         onChange={() => toggleSelected(c.id)}
@@ -506,11 +631,35 @@ export default function CustomerDatabaseDashboard({
       {detailCustomer && (
         <CustomerAccountModal
           customer={detailCustomer}
+          deliveryRoutes={deliveryRoutes}
           onClose={() => setDetailCustomer(null)}
           onSaved={(updated) => {
             setCustomers((prev) => prev.map((c) => (c.id === updated.id ? updated : c)));
             setDetailCustomer(updated);
           }}
+          onRouteChanged={(cycleId) => {
+            const id = detailCustomer.id;
+            void fetchCustomerList().then((list) => {
+              setCustomers(list);
+              setDetailCustomer(list.find((c) => c.id === id) ?? null);
+            });
+            onOrdersApplied?.(cycleId);
+          }}
+        />
+      )}
+
+      {printModalOpen && (
+        <CustomerDatabasePrintModal
+          customers={printCustomers}
+          filterSummary={printFilterSummary}
+          totalInDatabase={customers.length}
+          filteredCount={filtered.length}
+          selectedCount={selectedForPrint.length}
+          printingSelectedOnly={selectedForPrint.length > 0}
+          routeNameById={routeNameById}
+          onSelectAllFiltered={selectFiltered}
+          onClearAccountSelection={deselectAllCheckboxes}
+          onClose={() => setPrintModalOpen(false)}
         />
       )}
     </div>

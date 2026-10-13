@@ -170,6 +170,7 @@ export default function AddStopPanel({
                 {available.map((c) => (
                   <option key={c.id} value={c.id}>
                     {c.name} — {c.city}
+                    {c.hasOrder ? " (on another route)" : ""}
                   </option>
                 ))}
               </select>

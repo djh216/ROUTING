@@ -115,8 +115,8 @@ export default function OrderSelector({ onApplied, refreshKey = 0 }: OrderSelect
           const row = customers.find((c) => c.id === customerId);
           return {
             customerId,
-            cases: MIN_ORDER_CASES,
-            cycleId: row?.orderCycleId,
+            cases: row?.cases && row.cases > 0 ? row.cases : MIN_ORDER_CASES,
+            cycleId: row?.hasOrder ? row.orderCycleId : undefined,
             cycle: v.cycle,
           };
         });

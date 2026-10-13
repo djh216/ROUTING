@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
-import { updateCustomerAccount } from "../lib/api";
-import type { CustomerListItem } from "@shared/types";
+import { addOrderSelections, updateCustomerAccount } from "../lib/api";
+import { MIN_ORDER_CASES } from "@shared/constants";
+import type { CustomerListItem, TerritoryCycle } from "@shared/types";
 import { deliveryRunLabel } from "@shared/deliveryRuns";
+import { routeOptionsForPicker } from "../lib/deliveryRoutes";
 import { sanitizeTeamMembers } from "@shared/teamMembers";
 import ContactDisplay from "./ContactDisplay";
 
@@ -11,8 +13,10 @@ function displayTeamMembers(raw?: string): string {
 
 interface CustomerAccountModalProps {
   customer: CustomerListItem;
+  deliveryRoutes?: TerritoryCycle[];
   onClose: () => void;
   onSaved: (customer: CustomerListItem) => void;
+  onRouteChanged?: (cycleId: string) => void;
 }
 
 function DetailRow({ label, value }: { label: string; value: ReactNode }) {
@@ -47,8 +51,10 @@ const inputClass = "customer-account-modal__input";
 
 export default function CustomerAccountModal({
   customer,
+  deliveryRoutes = [],
   onClose,
   onSaved,
+  onRouteChanged,
 }: CustomerAccountModalProps) {
   const [isEditing, setIsEditing] = useState(false);
   const [name, setName] = useState(customer.name);
@@ -64,8 +70,12 @@ export default function CustomerAccountModal({
     customer.deliveryInstructions ?? ""
   );
   const [saving, setSaving] = useState(false);
+  const [movingRoute, setMovingRoute] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+
+  const routeOptions = routeOptionsForPicker(deliveryRoutes);
+  const routeNameById = new Map(deliveryRoutes.map((r) => [r.id, r.name]));
 
   const resetFormFromCustomer = useCallback((c: CustomerListItem) => {
     setName(c.name);
@@ -109,6 +119,34 @@ export default function CustomerAccountModal({
   function handleCancelEdit() {
     resetFormFromCustomer(customer);
     setIsEditing(false);
+  }
+
+  async function handleRouteChange(cycleId: string) {
+    if (!customer.hasOrder || cycleId === customer.orderCycleId) return;
+    setMovingRoute(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const result = await addOrderSelections(
+        [
+          {
+            customerId: customer.id,
+            cases: customer.cases > 0 ? customer.cases : MIN_ORDER_CASES,
+          },
+        ],
+        cycleId
+      );
+      if (result.errors.length > 0) {
+        setError(result.errors.join(" · "));
+        return;
+      }
+      setNotice(`Moved to ${routeNameById.get(cycleId) ?? cycleId}. Rebuild the route to update stops.`);
+      onRouteChanged?.(cycleId);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to change route");
+    } finally {
+      setMovingRoute(false);
+    }
   }
 
   async function handleSave() {
@@ -221,10 +259,35 @@ export default function CustomerAccountModal({
               value={customer.deliveryInstructions || "—"}
             />
             {customer.hasOrder ? (
-              <DetailRow
-                label="Order"
-                value={`${customer.cases} case${customer.cases !== 1 ? "s" : ""} this week`}
-              />
+              <>
+                <DetailRow
+                  label="Order"
+                  value={`${customer.cases} case${customer.cases !== 1 ? "s" : ""} this week`}
+                />
+                <div className="customer-account-modal__row">
+                  <dt className="customer-account-modal__label">Delivery route</dt>
+                  <dd className="customer-account-modal__value">
+                    {routeOptions.length > 0 ? (
+                      <select
+                        className="customer-account-modal__input"
+                        value={customer.orderCycleId ?? ""}
+                        disabled={movingRoute || saving}
+                        onChange={(e) => void handleRouteChange(e.target.value)}
+                      >
+                        {routeOptions.map((route) => (
+                          <option key={route.id} value={route.id}>
+                            {route.name}
+                          </option>
+                        ))}
+                      </select>
+                    ) : (
+                      routeNameById.get(customer.orderCycleId ?? "") ??
+                      customer.orderCycleId ??
+                      "—"
+                    )}
+                  </dd>
+                </div>
+              </>
             ) : null}
           </dl>
         ) : (

@@ -40,12 +40,15 @@ export function isOrderEligible(
   referenceDate: Date
 ): boolean {
   if (order.cycleId !== cycle.id) return false;
-  if (!cycleIncludesTerritory(cycle, order.territoryId)) return false;
   if (order.status === "delivered") return false;
 
   const approved = new Date(order.approvedAt);
   const cutoff = cutoffDateTime(referenceDate, cycle);
   if (approved > cutoff) return false;
+
+  if (!cycleIncludesTerritory(cycle, order.territoryId)) {
+    return true;
+  }
 
   for (const prev of getCyclesForTerritory(order.territoryId)) {
     if (prev.id === cycle.id) continue;

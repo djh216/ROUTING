@@ -1,4 +1,7 @@
-import { nearestDeliveryRouteAmong } from "../../shared/nearestDeliveryRoute.js";
+import {
+  daysUntilDelivery,
+  nearestDeliveryRouteAmong,
+} from "../../shared/nearestDeliveryRoute.js";
 import type { TerritoryCycle } from "../../shared/types.js";
 
 /** Customer-facing territory labels (CSV / order selection). */
@@ -22,6 +25,7 @@ export const TERRITORY_CYCLES: TerritoryCycle[] = [
   {
     id: "philadelphia-1",
     territoryId: "philadelphia",
+    territoryIds: ["philadelphia", "western-philly"],
     name: "Philadelphia",
     cutoffDay: "tuesday",
     cutoffTime: "14:30",
@@ -133,6 +137,11 @@ export function getTerritoryIdsForCycle(cycle: TerritoryCycle): string[] {
   return cycle.territoryIds ?? [cycle.territoryId];
 }
 
+/** First territory on a route — used to pick a default among same-day routes. */
+export function primaryTerritoryForCycle(cycle: TerritoryCycle): string {
+  return getTerritoryIdsForCycle(cycle)[0]!;
+}
+
 export function cycleIncludesTerritory(
   cycle: TerritoryCycle,
   territoryId: string
@@ -190,7 +199,17 @@ export function resolveCycleId(
   if (cycles.length === 0) throw new Error(`No cycles for territory ${territoryId}`);
 
   if (cycleRaw === undefined || cycleRaw === "") {
-    return nearestDeliveryRouteAmong(cycles, referenceDate)?.id ?? cycles[0]!.id;
+    const nearest = nearestDeliveryRouteAmong(cycles, referenceDate);
+    if (!nearest) return cycles[0]!.id;
+    const nearestDays = daysUntilDelivery(referenceDate, nearest);
+    const tied = cycles.filter(
+      (c) => daysUntilDelivery(referenceDate, c) === nearestDays
+    );
+    if (tied.length > 1) {
+      const primary = tied.find((c) => primaryTerritoryForCycle(c) === territoryId);
+      if (primary) return primary.id;
+    }
+    return nearest.id;
   }
 
   const n = typeof cycleRaw === "number" ? cycleRaw : Number(cycleRaw);
@@ -198,8 +217,12 @@ export function resolveCycleId(
     if (territoryId === "philadelphia" && n === 2) {
       return THURSDAY_SEPA_CYCLE_ID;
     }
-    const match = cycles.find((c) => c.cycle === n);
-    if (match) return match.id;
+    const matches = cycles.filter((c) => c.cycle === n);
+    if (matches.length > 0) {
+      if (matches.length === 1) return matches[0]!.id;
+      const primary = matches.find((c) => primaryTerritoryForCycle(c) === territoryId);
+      return (primary ?? matches[0])!.id;
+    }
   }
 
   const byId = cycles.find((c) => c.id === String(cycleRaw).trim());

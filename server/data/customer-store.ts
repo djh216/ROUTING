@@ -13,7 +13,6 @@ import { parseContactEmailField, parseCustomersCsv } from "./csv-parser.js";
 import {
   cycleNumberFromId,
   getCycleById,
-  cycleIncludesTerritory,
   getTerritoryDisplayName,
   resolveCycleId,
   resolveTerritoryInput,
@@ -248,14 +247,7 @@ export function getAvailableCustomersForCycle(cycleId: string): CustomerListItem
     orders.filter((o) => o.cycleId === cycleId).map((o) => o.customerId)
   );
 
-  return getCustomerListItems().filter((c) => {
-    if (!cycleIncludesTerritory(cycle, c.territoryId)) return false;
-    if (onThisRoute.has(c.id)) return false;
-    const existing = findOrderForCustomer(c.id);
-    // Philadelphia Wed vs Thu: already on another run for this account.
-    if (existing && existing.cycleId !== cycleId) return false;
-    return true;
-  });
+  return getCustomerListItems().filter((c) => !onThisRoute.has(c.id));
 }
 
 function findOrderForCustomer(customerId: string): Order | undefined {
@@ -449,15 +441,12 @@ export async function addStopToRoute(
     const customer = getCustomerById(input.customerId);
     if (!customer) {
       errors.push("Customer not found");
-    } else if (!cycleIncludesTerritory(cycle, customer.territoryId)) {
-      errors.push(`${customer.name} is not in this territory`);
     } else {
       const existing = findOrderForCustomer(customer.id);
       if (existing?.cycleId === cycleId) {
         errors.push(`${customer.name} is already on this route`);
       } else if (existing) {
-        const routeName = getCycleById(existing.cycleId)?.name ?? existing.cycleId;
-        errors.push(`${customer.name} is already on ${routeName}`);
+        assignCustomerToRoute(customer, cycleId, referenceDate, MIN_ORDER_CASES, true);
       } else {
         pushOrderForCustomer(customer, cycleId, referenceDate);
       }
@@ -465,8 +454,8 @@ export async function addStopToRoute(
   } else {
     const manual = input as ManualOrderInput;
     const territoryId = resolveTerritoryInput(manual.territoryId ?? "");
-    if (!territoryId || !cycleIncludesTerritory(cycle, territoryId)) {
-      errors.push("Territory must match the current route");
+    if (!territoryId) {
+      errors.push(`Unknown territory: ${manual.territoryId || "(empty)"}`);
     } else {
       const created = await createManualCustomer(manual, referenceDate, cycleId);
       warnings.push(...created.warnings);
@@ -499,11 +488,6 @@ function resolveOrderCycleId(
     const cycle = getCycleById(explicitRouteId);
     if (!cycle) {
       throw new Error(`Unknown route: ${explicitRouteId}`);
-    }
-    if (!cycleIncludesTerritory(cycle, customer.territoryId)) {
-      throw new Error(
-        `${customer.name} (${getTerritoryDisplayName(customer.territoryId)}) is not on route ${cycle.name}`
-      );
     }
     return cycle.id;
   }
@@ -616,6 +600,7 @@ function ordersToSelections(): OrderSelectionInput[] {
   return orders.map((o) => ({
     customerId: o.customerId,
     cases: o.cases,
+    cycleId: o.cycleId,
     cycle: cycleNumberFromId(o.cycleId),
   }));
 }
@@ -630,19 +615,9 @@ export function removeOrderForCustomer(
 
 export function clearOrdersForCycle(cycleId: string, referenceDate: Date): CustomerUploadSummary {
   const remaining = ordersToSelections().filter((s) => {
-    const customer = getCustomerById(s.customerId);
-    if (!customer) return true;
-    try {
-      return (
-        resolveCycleId(
-          customer.territoryId,
-          s.cycle !== undefined ? s.cycle : undefined,
-          referenceDate
-        ) !== cycleId
-      );
-    } catch {
-      return true;
-    }
+    const order = findOrderForCustomer(s.customerId);
+    if (!order) return true;
+    return order.cycleId !== cycleId;
   });
   return applyOrderSelection(remaining, referenceDate);
 }

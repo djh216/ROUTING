@@ -5,6 +5,7 @@ import {
   resolveCycleId,
   TERRITORY_CYCLES,
 } from "./territories.js";
+import { isOrderEligible } from "../routing/scheduling.js";
 
 const lehighRouteNames = TERRITORY_CYCLES.filter((c) =>
   (c.territoryIds ?? [c.territoryId]).includes("lehigh-valley")
@@ -44,6 +45,36 @@ if (resolveCycleId("lehigh-valley", undefined, sunday) !== LEHIGH_NORTHEAST_TUE_
 }
 if (resolveCycleId("philadelphia", undefined, sunday) !== "philadelphia-1") {
   throw new Error("Philadelphia default on Sunday should be Wednesday route");
+}
+
+const westernPhillyRoutes = getCyclesForTerritory("western-philly").map((c) => c.id);
+if (!westernPhillyRoutes.includes("philadelphia-1")) {
+  throw new Error("Western Philly should be eligible for Philadelphia (Wednesday) route");
+}
+if (!westernPhillyRoutes.includes("western-susquehanna-wed")) {
+  throw new Error("Western Philly should remain on Western Philly & Southern Susquehanna route");
+}
+
+const ref = new Date("2026-09-10T12:00:00");
+if (resolveCycleId("western-philly", 1, ref) !== "western-susquehanna-wed") {
+  throw new Error("Western Philly cycle 1 should default to Western Philly & Southern Susquehanna");
+}
+if (resolveCycleId("western-philly", undefined, ref) !== "western-susquehanna-wed") {
+  throw new Error("Western Philly default route should be Western Philly & Southern Susquehanna");
+}
+
+const philCycle = TERRITORY_CYCLES.find((c) => c.id === "philadelphia-1")!;
+const westernOrder = {
+  id: "o-test",
+  customerId: "c-test",
+  territoryId: "western-philly",
+  cycleId: "philadelphia-1",
+  cases: 6,
+  approvedAt: "2026-09-08T13:00:00",
+  status: "approved" as const,
+};
+if (!isOrderEligible(westernOrder, philCycle, ref)) {
+  throw new Error("Western Philly order on Philadelphia (Wednesday) should be eligible");
 }
 
 console.log("Territory cycle tests passed.");
