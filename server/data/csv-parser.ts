@@ -4,8 +4,8 @@ import { sanitizeTeamMembers } from "../../shared/teamMembers.js";
 import { resolveTerritoryInput } from "./territories.js";
 import {
   normalizeAddressFields,
-  resolveCoordinatesApproximate,
   normalizeCsvCoordinates,
+  resolveCoordinatesApproximate,
   consumeGeocoderAlerts,
   resetGeocoderAlerts,
 } from "./geocoder.js";

@@ -383,6 +383,7 @@ export default function CustomerDatabaseDashboard({
             <CustomerUpload
               layout="header"
               hideLoadedStatus
+              existingCustomerCount={customers.length}
               refreshKey={refreshKey}
               onCustomersLoaded={() => {
                 load();

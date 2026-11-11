@@ -1,0 +1,41 @@
+name: Deploy to AWS EC2
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-aws-ec2
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify deploy secrets are set
+        env:
+          EC2_HOST: ${{ secrets.EC2_HOST }}
+          EC2_USER: ${{ secrets.EC2_USER }}
+          EC2_SSH_PRIVATE_KEY: ${{ secrets.EC2_SSH_PRIVATE_KEY }}
+        run: |
+          if [ -z "$EC2_HOST" ] || [ -z "$EC2_USER" ] || [ -z "$EC2_SSH_PRIVATE_KEY" ]; then
+            echo "Missing one or more secrets: EC2_HOST, EC2_USER, EC2_SSH_PRIVATE_KEY"
+            exit 1
+          fi
+          echo "Deploy secrets present (values not printed)."
+      - name: Deploy over SSH
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_PRIVATE_KEY }}
+          timeout: 60s
+          script_stop: true
+          script: |
+            set -euo pipefail
+            APP_DIR="${{ vars.EC2_APP_DIR }}"
+            if [[ -z "$APP_DIR" ]]; then
+              APP_DIR="$HOME/ROUTINGv2"
+            fi
+            cd "$APP_DIR"
+            export DEPLOY_BRANCH=main
+            bash deploy/ec2/redeploy.sh

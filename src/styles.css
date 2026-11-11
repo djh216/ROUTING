@@ -255,6 +255,10 @@ body {
 }
 
 .customer-upload--header .customer-upload__issues {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
   margin: 0;
   flex: 0 1 auto;
   min-width: 0;
@@ -277,6 +281,10 @@ body {
 }
 
 .customer-database__header-toolbar .customer-upload {
+  display: contents;
+}
+
+.customer-database__header-toolbar .customer-upload__actions {
   display: contents;
 }
 

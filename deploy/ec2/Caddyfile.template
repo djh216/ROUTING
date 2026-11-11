@@ -1,0 +1,6 @@
+# Copy to /etc/caddy/Caddyfile via deploy/ec2/setup-caddy.sh (set ROUTING_DOMAIN in .env).
+
+${ROUTING_DOMAIN} {
+	encode gzip
+	reverse_proxy 127.0.0.1:3000
+}

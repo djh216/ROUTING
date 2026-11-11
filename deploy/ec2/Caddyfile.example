@@ -1,0 +1,1 @@
+# Use deploy/ec2/Caddyfile.template + setup-caddy.sh (reads ROUTING_DOMAIN from .env).

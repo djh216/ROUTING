@@ -17,6 +17,8 @@ interface CustomerUploadProps {
   layout?: "sidebar" | "inline" | "header";
   /** Hide loaded-account status (shown elsewhere on the page) */
   hideLoadedStatus?: boolean;
+  /** When the parent already knows accounts are loaded (e.g. after a failed re-import). */
+  existingCustomerCount?: number;
 }
 
 export default function CustomerUpload({
@@ -26,6 +28,7 @@ export default function CustomerUpload({
   title = "Weekly customers",
   layout = "sidebar",
   hideLoadedStatus = false,
+  existingCustomerCount = 0,
 }: CustomerUploadProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [uploading, setUploading] = useState(false);
@@ -50,10 +53,8 @@ export default function CustomerUpload({
       const text = await file.text();
       const result = await uploadCustomersCsv(text, file.name);
       setStatus(result);
-      if (result.customerCount > 0) {
-        onCustomersLoaded?.();
-        if (result.orderCount > 0) onUploaded();
-      }
+      onCustomersLoaded?.();
+      if (result.customerCount > 0 && result.orderCount > 0) onUploaded();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Upload failed");
     } finally {
@@ -81,6 +82,7 @@ export default function CustomerUpload({
   }
 
   async function handleClear() {
+    if (!canClearData) return;
     setUploading(true);
     setError(null);
     setParseIssuesOpen(false);
@@ -96,7 +98,11 @@ export default function CustomerUpload({
     }
   }
 
-  const hasLoadedAccounts = (status?.customerCount ?? 0) > 0;
+  const loadedCount = Math.max(status?.customerCount ?? 0, existingCustomerCount);
+  const hasUploadIssues = (status?.errors?.length ?? 0) > 0 || (status?.warnings?.length ?? 0) > 0;
+  const canClearData = loadedCount > 0 || hasUploadIssues;
+  const canRegeocode = (status?.customerCount ?? 0) > 0;
+  const showClearInIssuesBar = layout === "header" && parseIssues.length > 0 && canClearData;
 
   const layoutClass =
     layout === "header"
@@ -130,25 +136,31 @@ export default function CustomerUpload({
         >
           {uploading ? "Uploading…" : "Upload CSV"}
         </button>
-        {hasLoadedAccounts && (
-          <button
-            type="button"
-            className={`btn btn--secondary${layout === "header" ? " btn--compact" : " btn--block"}`}
-            disabled={uploading}
-            onClick={() => void handleRegeocode()}
-          >
-            {layout === "header" ? "Re-geocode" : "Re-geocode addresses"}
-          </button>
+        {(canRegeocode || canClearData) && (
+          <>
+            {canRegeocode ? (
+              <button
+                type="button"
+                className={`btn btn--secondary${layout === "header" ? " btn--compact" : " btn--block"}`}
+                disabled={uploading}
+                onClick={() => void handleRegeocode()}
+              >
+                {layout === "header" ? "Re-geocode" : "Re-geocode addresses"}
+              </button>
+            ) : null}
+            {canClearData && !showClearInIssuesBar ? (
+              <button
+                type="button"
+                className={`btn btn--secondary${layout === "header" ? " btn--compact" : " btn--block"}`}
+                disabled={uploading}
+                onClick={() => void handleClear()}
+                title="Remove imported accounts, orders, and failed upload state"
+              >
+                {layout === "header" ? "Clear data" : "Clear uploaded data"}
+              </button>
+            ) : null}
+          </>
         )}
-        <button
-          type="button"
-          className={`btn btn--secondary${layout === "header" ? " btn--compact" : " btn--block"}`}
-          disabled={uploading}
-          onClick={() => void handleClear()}
-          title="Remove imported accounts, orders, and failed upload state"
-        >
-          {layout === "header" ? "Clear data" : "Clear uploaded data"}
-        </button>
       </div>
 
       {status && status.customerCount === 0 && status.errors.length > 0 && (
@@ -174,6 +186,17 @@ export default function CustomerUpload({
 
       {parseIssues.length > 0 && (
         <div className="customer-upload__issues">
+          {showClearInIssuesBar ? (
+            <button
+              type="button"
+              className="btn btn--secondary btn--compact"
+              disabled={uploading}
+              title="Remove this import, then use Upload CSV to try again"
+              onClick={() => void handleClear()}
+            >
+              Clear data
+            </button>
+          ) : null}
           <button
             type="button"
             className="customer-upload__issues-toggle"

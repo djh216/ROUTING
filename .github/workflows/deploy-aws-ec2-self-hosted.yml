@@ -1,0 +1,50 @@
+# Deploy on the EC2 instance via the self-hosted runner (label: routing).
+# No inbound SSH from GitHub; the job runs on the server and calls redeploy.sh.
+#
+# https://docs.github.com/en/actions/hosting-your-own-runners
+
+name: Deploy to AWS EC2 (self-hosted runner)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+# Separate group from deploy-aws-ec2 (SSH workflow) so a stuck SSH run cannot block this path.
+concurrency:
+  group: deploy-aws-ec2-self-hosted
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: [self-hosted, linux, routing]
+    steps:
+      - name: Redeploy from server clone
+        env:
+          APP_DIR_VAR: ${{ vars.EC2_APP_DIR }}
+        run: |
+          set -euo pipefail
+          APP_DIR="${APP_DIR_VAR:-$HOME/ROUTINGv2}"
+          if [[ ! -d "$APP_DIR" ]]; then
+            echo "Repo not found at $APP_DIR — set Actions variable EC2_APP_DIR or clone to ~/ROUTINGv2"
+            exit 1
+          fi
+          cd "$APP_DIR"
+          export DEPLOY_BRANCH=main
+          bash deploy/ec2/redeploy.sh
+
+      - name: Health check
+        run: |
+          set -euo pipefail
+          URL="http://127.0.0.1:3000/api/health"
+          for attempt in $(seq 1 30); do
+            if body="$(curl -fsS "$URL" 2>/dev/null)" && echo "$body" | grep -q '"ok":true'; then
+              echo "Health OK (attempt $attempt)"
+              echo "$body"
+              exit 0
+            fi
+            echo "Waiting for app (attempt $attempt/30)..."
+            sleep 2
+          done
+          echo "Health check failed: $URL did not return ok:true"
+          exit 1
